@@ -1,0 +1,5 @@
+Synthetic fixture.
+
+In this synthetic cooling exercise the group recorded the temperature of two hundred millilitres of water in a glass beaker after the water had been heated to sixty degrees. Readings were taken every thirty seconds on the open bench, and the first reading was sixty degrees. The later readings fell to fifty seven, then fifty five, then fifty three degrees. No room temperature was recorded, and no cooling model was fitted, so the note only describes the observed drop. This paragraph is fixture text for a local corpus match and is long enough to form several four token shingles.
+
+A second synthetic paragraph states that the group wiped the bench and left the beaker to finish cooling without further notes or a fitted curve in the writeup.

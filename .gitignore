@@ -1,0 +1,25 @@
+/target/
+**/*.rs.bk
+
+# Local corpus databases. These files contain original coursework text.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+.course-integrity/
+
+# Generated reports and local data
+/reports/
+/data/
+/out/
+*.review.json
+*.review.md
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+secrets/

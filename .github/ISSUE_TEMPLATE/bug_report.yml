@@ -1,0 +1,43 @@
+name: Bug report
+description: Report a defect in course-integrity
+title: "[bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please use synthetic text only. Do not attach student coursework or a corpus database.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What the command printed or did.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `course-integrity --version`.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and synthetic input
+      description: The command you ran, and a short synthetic file if the bug depends on the text.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system and `rustc --version`, if you built from source.
+    validations:
+      required: false
