@@ -2,7 +2,7 @@
 
 Local-first coursework integrity **precheck** for English-medium undergraduate writing, including lab reports and group discussion drafts, with Chinese text supported in the same command.
 
-It reads UTF-8 `.txt` and `.md` files on your machine. It describes sentence length, repetition, vocabulary, and a fixed list of transition phrases. If you point it at a local database you built yourself, it also shows exact and near-exact overlap with those files.
+It reads UTF-8 `.txt` and `.md` on your machine, and it extracts text from `.docx` and from text-based PDFs. It describes sentence length, repetition, vocabulary, and a fixed list of transition phrases. If you point it at a local database you built yourself, it also shows exact and near-exact overlap with those files. Quotations, bibliography sections, and files you pass with `--boilerplate` are listed separately and are not treated as the main overlap evidence.
 
 Descriptive review signals only. These figures are not an AI probability, not a calibrated risk score, not a confidence interval, and not an accuracy claim. They are insufficient evidence for authorship. A similarity match is not a plagiarism verdict.
 
@@ -12,15 +12,21 @@ Chinese quickstart: [README.zh-CN.md](README.zh-CN.md).
 
 This is not Turnitin, CNKI, or a replacement for either. It does not connect to them, it does not contain their corpora, and it does not claim to reproduce their results. It does not use the network.
 
-## What you can do with 0.1.0
+## What 0.2.0 actually does
 
-- `scan` a file or a folder of `.txt` and `.md` drafts.
-- Print Markdown, JSON, or both.
-- `corpus add` those files into a SQLite database you name with `--db`.
-- `corpus check` a draft against only that database.
-- See the source label, paragraph number, and a short excerpt for each hit, plus the containment denominator.
+| Capability | Status |
+| --- | --- |
+| UTF-8 `.txt` and `.md` | Read directly |
+| `.docx` | Text extracted from `word/document.xml` and header/footer XML, with paragraph locations. Images are counted and skipped |
+| Text-based `.pdf` | Text extracted per page. Empty pages are reported |
+| Scanned PDF, photos, charts | Not read. OCR is not included |
+| Legacy `.doc` | Not read. Save as `.docx` |
+| Markdown, JSON, and offline HTML reports | Written locally. HTML has no scripts and no remote assets |
+| Local SQLite corpus | Schema version 1, same as 0.1.0. No migration. Only extracted plain text is stored for DOCX and PDF |
+| Quotations, bibliographies, `--boilerplate` | Shown under "set aside". Still shingle overlap, not a meaning comparison |
+| Network, AI probability, plagiarism verdict | Not included |
 
-DOCX, PDF, and trained models are not in this version. See [docs/roadmap.md](docs/roadmap.md).
+See [docs/roadmap.md](docs/roadmap.md) for what is still deferred.
 
 ## Build
 
@@ -40,7 +46,12 @@ The license is [MIT](LICENSE).
 ```bash
 cargo run --locked -- scan examples/lab-report-en.md
 cargo run --locked -- scan examples/lab-report-zh.md --format json
+cargo run --locked -- scan fixtures/synthetic/lab-report-en.docx --format html --out-dir /tmp/ci-report
 ```
+
+`--format all` writes `.review.md`, `.review.html`, and `.review.json`. It needs `--out-dir`. Each written path is printed on stderr so a JSON report on stdout stays parseable.
+
+Exit code 2 means the command line was wrong, including `--format all` without `--out-dir`. Exit code 1 means a file or database could not be read. The message names the path and the limit when a DOCX zip or a PDF is refused.
 
 Exit code 0 means the command finished. It does not mean the draft is acceptable or original.
 
@@ -69,6 +80,17 @@ cargo run --locked -- corpus check fixtures/synthetic/group_draft.md \
   --db .course-integrity/demo.db
 cargo run --locked -- corpus stats --db .course-integrity/demo.db
 cargo run --locked -- corpus list --db .course-integrity/demo.db
+cargo run --locked -- corpus remove --db .course-integrity/demo.db --id 1
+```
+
+`corpus remove --id` deletes that row and its passages from the local file only.
+
+Compare a draft with the lab handout without storing the handout:
+
+```bash
+cargo run --locked -- scan fixtures/synthetic/group_draft.md \
+  --boilerplate fixtures/synthetic/shared_prompt.md \
+  --db .course-integrity/demo.db
 ```
 
 `corpus add` stores the **full original text** of each file that has a passage of at least 40 normalized characters, plus a normalized copy and the shingles. Short files are skipped and are not written. See [docs/privacy.md](docs/privacy.md).
@@ -110,4 +132,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.
 
 ## Version
 
-0.1.0. This crate is `publish = false` and is not published to crates.io.
+0.2.0. This crate is `publish = false` and is not published to crates.io. A sample offline report is [examples/sample-report.html](examples/sample-report.html).

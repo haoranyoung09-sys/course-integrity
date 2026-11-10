@@ -1,13 +1,17 @@
 # Roadmap
 
-Version 0.1.0 is a local precheck for UTF-8 `.txt` and `.md` drafts. Later items are optional. They are not in this version, and the report does not pretend that they ran.
+Version 0.2.0 reads UTF-8 `.txt` and `.md`, extracts text from `.docx` and text-based `.pdf`, and writes an offline HTML report as well as Markdown and JSON. The local database is still schema 1.
 
 ## Possible later work
 
-- Reading DOCX and PDF by extracting their text, with the same descriptive report and the same statement when extraction is lossy.
+- Optional local OCR for scans, behind an explicit flag and a documented external program. It is not in 0.2.0.
 - An optional Chinese word segmenter, off by default, so character shingles remain the documented behavior until someone chooses otherwise.
 - An index for larger local corpora. The score would stay containment over distinct query shingles.
-- Clearer export for a seminar discussion, still without an overall score.
+
+## In 0.2.0, and still not a verdict
+
+- DOCX and PDF input is text extraction. It does not describe figures or charts.
+- Set-aside rows for quotations, bibliographies, and `--boilerplate` files are still shingle matches. They are not a semantic comparison.
 
 ## Not planned
 

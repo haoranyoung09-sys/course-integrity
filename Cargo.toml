@@ -1,6 +1,6 @@
 [package]
 name = "course-integrity"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.83"
 description = "Local-first coursework integrity precheck for undergraduate writing"
@@ -26,6 +26,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = ">=0.10, <0.11"
 unicode-normalization = "0.1"
+zip = { version = "=2.2.0", default-features = false, features = ["deflate"] }
+quick-xml = "=0.36.2"
+pdf-extract = "=0.7.12"
+# Pins keep the graph on Rust 1.83. Newer releases of these crates need 1.85 or edition 2024.
+time = "=0.3.36"
+encoding_rs = "=0.8.35"
+indexmap = "=2.9.0"
+hashbrown = "=0.15.5"
+zopfli = "=0.8.2"
+flate2 = { version = "=1.0.35", default-features = false, features = ["rust_backend"] }
 
 [dev-dependencies]
 serde_json = "1"

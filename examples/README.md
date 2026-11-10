@@ -6,6 +6,8 @@ These files are synthetic teaching examples for an English-medium undergraduate 
 - `lab-report-zh.md` — the same kind of note in Chinese.
 - `group-discussion.md` — three speakers answering a shared prompt. The prompt is repeated on purpose so a local corpus check can show shared wording without calling it plagiarism.
 
+A generated offline report for the English Word fixture is [sample-report.html](sample-report.html).
+
 Try:
 
 ```bash

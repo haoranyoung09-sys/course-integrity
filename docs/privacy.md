@@ -6,7 +6,7 @@
 
 Nothing is stored unless you run `corpus add` or another command with `--db`.
 
-This local SQLite database stores the full original text of each added file that had a matchable passage, plus a normalized copy of each passage and its shingles. The tool does not upload that text. Do not commit the database, and do not point it at coursework you are not allowed to keep.
+This local SQLite database stores the full original text of each added UTF-8 file that had a matchable passage, or the extracted plain text of a DOCX or PDF, plus a normalized copy of each passage and its shingles. The original DOCX or PDF bytes are not stored. The tool does not upload that text. Do not commit the database, and do not point it at coursework you are not allowed to keep.
 
 Each stored document also has the source label you passed (usually the path), a SHA-256 of the normalized text, the character count, the passage count, and a UTC timestamp. `corpus list` prints the label, hash, counts, and time. It does not print the text. The text is still in the file and anyone who can read that file can read the coursework.
 
@@ -26,7 +26,7 @@ JSON and Markdown reports quote matching passages, up to 400 characters each. Tr
 
 This version has no accounts, no encryption, and no access control. The person who can read the database can read every text that was added. Do not add another student's file unless your course allows you to keep that copy.
 
-The tool only reads the files you name. It does not execute them. It refuses paths that are not UTF-8 `.txt` or `.md`, and it refuses a single file larger than 2 MiB.
+The tool only reads the files you name. It does not execute them. It reads UTF-8 `.txt` and `.md`, `.docx`, and text-based `.pdf`. It refuses a single file larger than 8 MiB. A DOCX is a zip: more than 128 entries, an entry over 8 MiB uncompressed, or more than 32 MiB uncompressed in total is refused. XML that declares a DOCTYPE or entity is refused. Paths inside the zip that climb out of the archive are skipped.
 
 There is no network service in this repository. If you find a bug that writes outside the `--db` or `--out-dir` path you passed, open a GitHub issue. Do not attach real student work, a corpus database, or secrets. Version 0.1.x is the supported line for this first release.
 

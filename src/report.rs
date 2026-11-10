@@ -2,9 +2,10 @@ use serde::Serialize;
 
 use crate::corpus::CorpusSection;
 use crate::method::{
-    CONTAINMENT_DENOMINATOR, COUNT_STREAMS, DISCLAIMER, EXACT_DESC, HASH_DESC, JACCARD_DESC,
-    LENGTH_UNIT_NOTE, LIMITATIONS, NOT_QUERIED_LINE, NO_OVERALL_SCORE, PRODUCT, REPETITION_NOTE,
-    SCHEMA, SELF_DESC, SHINGLE_DESC, TOKENIZER_DESC, TRANSITION_NOTE, UNICODE_DESC, VOCAB_NOTE,
+    CONTAINMENT_DENOMINATOR, COUNT_STREAMS, DB_COMPAT, DISCLAIMER, EXACT_DESC, EXTRACTION_DESC,
+    HASH_DESC, JACCARD_DESC, LENGTH_UNIT_NOTE, LIMITATIONS, NOT_QUERIED_LINE, NO_OVERALL_SCORE,
+    OCR_DEFERRED, PRODUCT, REPETITION_NOTE, SCHEMA, SELF_DESC, SET_ASIDE_DESC, SHINGLE_DESC,
+    TOKENIZER_DESC, TRANSITION_NOTE, UNICODE_DESC, VOCAB_NOTE,
 };
 use crate::stats::{analyze, DocumentStats, Evidence, ParagraphStats};
 
@@ -32,11 +33,18 @@ pub struct MethodStamp {
     pub repetition: &'static str,
     pub transitions: &'static str,
     pub no_overall_score: &'static str,
+    pub extraction: &'static str,
+    pub ocr: &'static str,
+    pub set_aside: &'static str,
+    pub database_compatibility: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FileReview {
     pub source_label: String,
+    pub origin: String,
+    pub extraction_notes: Vec<String>,
+    pub paragraph_locations: Vec<String>,
     pub input: InputInfo,
     pub evidence: Evidence,
     pub notes: Vec<String>,
@@ -57,21 +65,29 @@ pub struct Bundle {
     pub files: Vec<FileReview>,
 }
 
-pub(crate) fn review_file(
-    label: &str,
-    text: &str,
-    bytes: u64,
-    corpus: Option<CorpusSection>,
-) -> FileReview {
-    let analysis = analyze(text);
+pub(crate) struct ReviewInput<'a> {
+    pub label: &'a str,
+    pub text: &'a str,
+    pub bytes: u64,
+    pub origin: &'a str,
+    pub extraction_notes: &'a [String],
+    pub paragraph_locations: &'a [String],
+    pub corpus: Option<CorpusSection>,
+}
+
+pub(crate) fn review_file(input: ReviewInput<'_>) -> FileReview {
+    let analysis = analyze(input.text);
     let mut notes = analysis.notes;
-    if corpus.is_none() {
+    if input.corpus.is_none() {
         notes.push(NOT_QUERIED_LINE.to_string());
     }
     FileReview {
-        source_label: label.to_string(),
+        source_label: input.label.to_string(),
+        origin: input.origin.to_string(),
+        extraction_notes: input.extraction_notes.to_vec(),
+        paragraph_locations: input.paragraph_locations.to_vec(),
         input: InputInfo {
-            bytes,
+            bytes: input.bytes,
             characters: analysis.characters,
             encoding: "utf-8",
             bom_stripped: analysis.bom_stripped,
@@ -82,7 +98,7 @@ pub(crate) fn review_file(
         limitations: LIMITATIONS,
         document: analysis.document,
         paragraphs: analysis.paragraphs,
-        corpus,
+        corpus: input.corpus,
     }
 }
 
@@ -113,6 +129,10 @@ fn method_stamp() -> MethodStamp {
         repetition: REPETITION_NOTE,
         transitions: TRANSITION_NOTE,
         no_overall_score: NO_OVERALL_SCORE,
+        extraction: EXTRACTION_DESC,
+        ocr: OCR_DEFERRED,
+        set_aside: SET_ASIDE_DESC,
+        database_compatibility: DB_COMPAT,
     }
 }
 
@@ -154,12 +174,20 @@ pub(crate) fn render_markdown(bundle: &Bundle) -> String {
 fn render_file(out: &mut String, file: &FileReview) {
     out.push_str(&format!("## {}\n\n", file.source_label));
     out.push_str(&format!(
-        "- Encoding: {}\n- Bytes: {}\n- Characters: {}\n- BOM stripped: {}\n\n",
+        "- Origin: {}\n- Encoding of stored text: {}\n- Bytes: {}\n- Characters: {}\n- BOM stripped: {}\n\n",
+        file.origin,
         file.input.encoding,
         file.input.bytes,
         file.input.characters,
         if file.input.bom_stripped { "yes" } else { "no" }
     ));
+    if !file.extraction_notes.is_empty() {
+        out.push_str("### What was read\n\n");
+        for note in &file.extraction_notes {
+            out.push_str(&format!("- {note}\n"));
+        }
+        out.push('\n');
+    }
     out.push_str("### Evidence limits\n\n");
     out.push_str(&format!("- Level: `{}`\n", file.evidence.level));
     out.push_str(&format!("- Authorship: {}\n", file.evidence.authorship));
@@ -209,6 +237,10 @@ fn render_file(out: &mut String, file: &FileReview) {
         file.method.repetition,
         file.method.transitions,
         file.method.no_overall_score,
+        file.method.extraction,
+        file.method.ocr,
+        file.method.set_aside,
+        file.method.database_compatibility,
     ] {
         out.push_str(&format!("- {line}\n"));
     }
@@ -344,20 +376,31 @@ fn render_corpus(out: &mut String, corpus: &Option<CorpusSection>) {
         }
     }
     if corpus.matches.is_empty() {
-        out.push_str("#### Matches\n\nNo passage met the exact or near-exact threshold.\n\n");
-    } else {
-        out.push_str("#### Matches\n\n");
         out.push_str(
-            "These hits are descriptive overlap signals. They are not a plagiarism verdict.\n\n",
+            "#### Main overlaps\n\nNo prose passage met the exact or near-exact threshold.\n\n",
+        );
+    } else {
+        out.push_str("#### Main overlaps\n\n");
+        out.push_str(
+            "These hits are descriptive shingle overlaps in passages that were not set aside. They are not a plagiarism verdict.\n\n",
         );
         for hit in &corpus.matches {
             render_hit(out, hit);
         }
         if corpus.truncated_match_count > 0 {
             out.push_str(&format!(
-                "{} additional matches were omitted from this report.\n\n",
+                "{} additional main overlaps were omitted from this report.\n\n",
                 corpus.truncated_match_count
             ));
+        }
+    }
+    if !corpus.context_overlaps.is_empty() {
+        out.push_str("#### Set aside\n\n");
+        out.push_str(
+            "Quotations, bibliography sections, and boilerplate are not treated as evidence of copied prose.\n\n",
+        );
+        for hit in &corpus.context_overlaps {
+            render_hit(out, hit);
         }
     }
     if let Some(hit) = &corpus.strongest_below_threshold {
@@ -376,7 +419,8 @@ fn render_hit(out: &mut String, hit: &crate::corpus::MatchHit) {
         hit.source_label
     ));
     out.push_str(&format!(
-        "  - Exact: {}\n  - Meets threshold: {}\n  - Shared shingles: {}\n  - Query shingles (denominator): {}\n  - Source shingles: {}\n  - Containment basis points: {}\n  - Jaccard basis points: {}\n  - {}\n  - {}\n  - Query excerpt: {}\n  - Source excerpt: {}\n\n",
+        "  - Kind: {}\n  - Exact: {}\n  - Meets threshold: {}\n  - Shared shingles: {}\n  - Query shingles (denominator): {}\n  - Source shingles: {}\n  - Containment basis points: {}\n  - Jaccard basis points: {}\n  - {}\n  - {}\n  - Query excerpt: {}\n  - Source excerpt: {}\n\n",
+        hit.source_kind,
         if hit.exact { "yes" } else { "no" },
         if hit.meets_threshold { "yes" } else { "no" },
         hit.shared_shingles,

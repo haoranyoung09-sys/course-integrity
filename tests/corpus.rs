@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use course_integrity::{CheckOptions, Database};
+use course_integrity::{boilerplate_passages, CheckOptions, Database};
 
 fn db_path(name: &str) -> PathBuf {
     let nanos = SystemTime::now()
@@ -27,6 +27,7 @@ fn options(include_self: bool) -> CheckOptions {
     CheckOptions {
         min_containment_basis_points: 8000,
         include_self,
+        boilerplate: Vec::new(),
     }
 }
 
@@ -178,6 +179,77 @@ fn roundtrip_duplicate_self_and_english_chinese_matches() {
     assert!(coverage.scope.contains("not a commercial checker corpus"));
     assert!(coverage.total_characters > 0);
 
+    drop(db);
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn schema_stays_1_and_remove_deletes_local_text() {
+    let path = db_path("schema");
+    let mut db = Database::open(&path).expect("open");
+    assert_eq!(db.schema_version().expect("schema"), "1");
+    let added = db
+        .add_text("note.md", &read("fixtures/synthetic/en_source.md"))
+        .expect("add");
+    let id = added.document_id.expect("id");
+    let removed = db.remove_document(id).expect("remove");
+    assert!(removed.detail.contains("No remote copy"));
+    assert!(db.list_documents().expect("list").is_empty());
+    let missing = db.remove_document(id).expect_err("missing");
+    assert!(missing.to_string().contains("Nothing was deleted"));
+    drop(db);
+    let reopened = Database::open(&path).expect("reopen");
+    assert_eq!(reopened.schema_version().expect("schema"), "1");
+    drop(reopened);
+    let _ = fs::remove_file(&path);
+}
+
+#[test]
+fn quotes_bibliography_and_boilerplate_are_not_main_evidence() {
+    let path = db_path("aside");
+    let mut db = Database::open(&path).expect("open");
+    let shared = "In this synthetic cooling exercise the group recorded the temperature of two hundred millilitres of water and the later readings fell steadily over several minutes while the bench stayed dry.";
+    let reference = "Synthetic Author. A made up cooling note for a fixture bibliography entry that is long enough to form several four token shingles in the reference list.";
+    let prose = "The afternoon group wiped the bench, left the beaker to finish cooling, and wrote that the room temperature was never measured so no model was fitted.";
+    let source = format!("Synthetic fixture.\n\n{shared}\n\n{reference}\n\n{prose}\n");
+    db.add_text("classmate.md", &source).expect("add");
+    let query = format!(
+        "Synthetic fixture.\n\n\"{shared}\"\n\n# References\n\n{reference}\n\n# Discussion\n\n{prose}\n"
+    );
+    let result = db
+        .check_text("draft.md", &query, &options(false))
+        .expect("check");
+    assert!(result
+        .matches
+        .iter()
+        .any(|hit| hit.query_excerpt.contains("afternoon group")));
+    assert!(result
+        .matches
+        .iter()
+        .all(|hit| !hit.query_excerpt.contains("Synthetic Author")));
+    assert!(result
+        .context_overlaps
+        .iter()
+        .any(|hit| { hit.set_aside.unwrap_or("").contains("quotation") }));
+    assert!(result
+        .context_overlaps
+        .iter()
+        .any(|hit| hit.set_aside.unwrap_or("").contains("references")));
+
+    let mut with_handout = options(false);
+    with_handout.boilerplate =
+        boilerplate_passages("handout.md", &format!("Synthetic fixture.\n\n{prose}\n"));
+    let templated = db
+        .check_text("draft.md", &query, &with_handout)
+        .expect("template");
+    assert!(templated
+        .matches
+        .iter()
+        .all(|hit| !hit.query_excerpt.contains("afternoon group")));
+    assert!(templated
+        .context_overlaps
+        .iter()
+        .any(|hit| hit.source_kind == "boilerplate"));
     drop(db);
     let _ = fs::remove_file(&path);
 }

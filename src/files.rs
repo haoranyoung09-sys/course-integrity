@@ -2,13 +2,17 @@ use std::fs;
 use std::path::Path;
 
 use crate::error::Error;
-use crate::method::MAX_FILE_BYTES;
-use crate::tokenize::canonical_label;
+use crate::extract::{extract_docx, extract_pdf};
+use crate::method::{EXTRACTION_DESC, MAX_FILE_BYTES};
+use crate::tokenize::{canonical_label, paragraphs};
 
 pub(crate) struct LoadedFile {
     pub label: String,
     pub text: String,
     pub bytes: u64,
+    pub origin: String,
+    pub locations: Vec<String>,
+    pub diagnostics: Vec<String>,
 }
 
 pub(crate) struct LoadedSet {
@@ -38,7 +42,7 @@ pub(crate) fn load_inputs(path: &Path, label_override: Option<&str>) -> Result<L
             path: path.to_path_buf(),
         });
     }
-    let mut loaded = read_utf8(path)?;
+    let mut loaded = load_file(path)?;
     if let Some(label) = label_override {
         loaded.label = canonical_label(label);
     }
@@ -54,7 +58,7 @@ fn load_directory(path: &Path) -> Result<LoadedSet, Error> {
     walk(path, &mut paths, &mut warnings)?;
     let mut files = Vec::new();
     for file in paths {
-        match read_utf8(&file) {
+        match load_file(&file) {
             Ok(loaded) => files.push(loaded),
             Err(error) => warnings.push(error.to_string()),
         }
@@ -105,9 +109,9 @@ fn walk(
         } else if file_type.is_file() {
             if is_supported(&path) {
                 paths.push(path);
-            } else if is_deferred_format(&path) {
+            } else if is_legacy_doc(&path) {
                 warnings.push(format!(
-                    "{}: DOCX and PDF are not read in this version; skipped",
+                    "{}: legacy Word .doc is not read. Save as .docx or .pdf.",
                     path.display()
                 ));
             }
@@ -116,7 +120,55 @@ fn walk(
     Ok(())
 }
 
-fn read_utf8(path: &Path) -> Result<LoadedFile, Error> {
+fn load_file(path: &Path) -> Result<LoadedFile, Error> {
+    let bytes = read_limited(path)?;
+    let extension = extension_of(path);
+    let loaded = if extension == "docx" {
+        let extracted = extract_docx(path, &bytes)?;
+        LoadedFile {
+            label: canonical_label(&path.to_string_lossy()),
+            text: extracted.text,
+            bytes: byte_len(&bytes),
+            origin: extracted.origin.to_string(),
+            locations: extracted.locations,
+            diagnostics: extracted.diagnostics,
+        }
+    } else if extension == "pdf" {
+        let extracted = extract_pdf(path, &bytes)?;
+        LoadedFile {
+            label: canonical_label(&path.to_string_lossy()),
+            text: extracted.text,
+            bytes: byte_len(&bytes),
+            origin: extracted.origin.to_string(),
+            locations: extracted.locations,
+            diagnostics: extracted.diagnostics,
+        }
+    } else {
+        let text = String::from_utf8(bytes.clone()).map_err(|_| Error::NotUtf8 {
+            path: path.to_path_buf(),
+        })?;
+        let locations = paragraphs(&text)
+            .into_iter()
+            .enumerate()
+            .map(|(index, _)| format!("paragraph {}", index + 1))
+            .collect();
+        LoadedFile {
+            label: canonical_label(&path.to_string_lossy()),
+            text,
+            bytes: byte_len(&bytes),
+            origin: "utf-8".to_string(),
+            locations,
+            diagnostics: vec![
+                "Read as UTF-8 text. Paragraph locations are blank-line blocks in the file."
+                    .to_string(),
+                EXTRACTION_DESC.to_string(),
+            ],
+        }
+    };
+    Ok(loaded)
+}
+
+fn read_limited(path: &Path) -> Result<Vec<u8>, Error> {
     let meta = fs::metadata(path).map_err(|source| io_at(path, source))?;
     if meta.len() > MAX_FILE_BYTES {
         return Err(Error::TooLarge {
@@ -124,15 +176,7 @@ fn read_utf8(path: &Path) -> Result<LoadedFile, Error> {
             bytes: meta.len(),
         });
     }
-    let bytes = fs::read(path).map_err(|source| io_at(path, source))?;
-    let text = String::from_utf8(bytes).map_err(|_| Error::NotUtf8 {
-        path: path.to_path_buf(),
-    })?;
-    Ok(LoadedFile {
-        label: canonical_label(&path.to_string_lossy()),
-        text,
-        bytes: meta.len(),
-    })
+    fs::read(path).map_err(|source| io_at(path, source))
 }
 
 fn io_at(path: &Path, source: std::io::Error) -> Error {
@@ -149,16 +193,20 @@ fn io_at(path: &Path, source: std::io::Error) -> Error {
 }
 
 fn is_supported(path: &Path) -> bool {
-    extension_is(path, &["txt", "md"])
+    matches!(extension_of(path).as_str(), "txt" | "md" | "docx" | "pdf")
 }
 
-fn is_deferred_format(path: &Path) -> bool {
-    extension_is(path, &["pdf", "docx", "doc"])
+fn is_legacy_doc(path: &Path) -> bool {
+    extension_of(path) == "doc"
 }
 
-fn extension_is(path: &Path, extensions: &[&str]) -> bool {
+fn byte_len(bytes: &[u8]) -> u64 {
+    u64::try_from(bytes.len()).unwrap_or(u64::MAX)
+}
+
+fn extension_of(path: &Path) -> String {
     path.extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_ascii_lowercase())
-        .is_some_and(|ext| extensions.iter().any(|candidate| ext == *candidate))
+        .unwrap_or_default()
 }

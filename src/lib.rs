@@ -8,13 +8,19 @@
 pub mod cli;
 mod corpus;
 mod error;
+mod extract;
 mod files;
+mod html;
 mod method;
+mod regions;
 mod report;
 mod stats;
 mod tokenize;
 
-pub use corpus::{threshold_basis_points, AddOutcome, CheckOptions, Coverage, Database, DocInfo};
+pub use corpus::{
+    boilerplate_passages, threshold_basis_points, AddOutcome, BoilerplatePassage, CheckOptions,
+    Coverage, Database, DocInfo,
+};
 pub use error::Error;
 pub use method::{
     AUTHORSHIP_LINE, CONTAINMENT_DENOMINATOR, COUNT_STREAMS, DISCLAIMER, EXACT_DESC, EXCERPT_NOTE,

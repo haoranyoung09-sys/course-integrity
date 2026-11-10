@@ -53,7 +53,7 @@ fn help_lists_scan_and_corpus_without_a_risk_score() {
     assert!(String::from_utf8_lossy(&add_help.stdout).contains("--db"));
     let version = run(&["--version"]);
     assert!(version.status.success());
-    assert!(String::from_utf8_lossy(&version.stdout).contains("0.1.0"));
+    assert!(String::from_utf8_lossy(&version.stdout).contains("0.2.0"));
     let bare = run(&[]);
     assert_eq!(bare.status.code(), Some(2));
 }
