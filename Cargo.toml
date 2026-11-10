@@ -1,0 +1,31 @@
+[package]
+name = "course-integrity"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+description = "Local-first coursework integrity precheck for undergraduate writing"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/haoranyoung09-sys/course-integrity"
+publish = false
+keywords = ["education", "cli", "writing"]
+categories = ["command-line-utilities"]
+
+[lib]
+name = "course_integrity"
+path = "src/lib.rs"
+
+[[bin]]
+name = "course-integrity"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "=4.5.40", features = ["derive"] }
+rusqlite = { version = ">=0.32, <0.33", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = ">=0.10, <0.11"
+unicode-normalization = "0.1"
+
+[dev-dependencies]
+serde_json = "1"

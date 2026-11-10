@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest a change that keeps the tool a local descriptive precheck
+title: "[feature] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This tool stays local and descriptive. Requests for an AI-probability score, a commercial-checker connection, or a way to lower a similarity number will be declined.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is hard to do today?
+    validations:
+      required: true
+  - type: textarea
+    id: change
+    attributes:
+      label: What should change?
+    validations:
+      required: true
+  - type: textarea
+    id: limits
+    attributes:
+      label: What should the report still refuse to claim?
+      description: For example authorship, a probability, or a plagiarism verdict.
+    validations:
+      required: true
