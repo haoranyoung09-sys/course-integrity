@@ -78,9 +78,27 @@ Adding the same normalized text twice does not create a second row. The second a
 
 Coverage is only this local database. It is not the web, not an institution-wide archive, and not a commercial checker corpus. This tool does not connect to Turnitin, CNKI, or any other remote service, and it does not claim to reproduce their results.
 
-This local SQLite database stores the full original text of each added file that had a matchable passage, plus a normalized copy of each passage and its shingles. The tool does not upload that text. Do not commit the database, and do not point it at coursework you are not allowed to keep.
+This local SQLite database stores the full original text of each added UTF-8 file that had a matchable passage, or the extracted plain text of a DOCX or PDF, plus a normalized copy of each passage and its shingles. The original DOCX or PDF bytes are not stored. The tool does not upload that text. Do not commit the database, and do not point it at coursework you are not allowed to keep.
 
 An empty corpus reports zero documents. No overlap can be found. That is not evidence that a draft is original. `scan` without `--db` does not look for overlap at all.
+
+## DOCX, PDF, and where a passage came from
+
+DOCX text is read from word/document.xml and from word header and footer XML. Paragraph locations name that file and the paragraph number. PDF text is read from each page's text layer, and locations name the page. Images, drawings, charts, text boxes, and legacy .doc files are not read. A Word or PDF file is text extraction, not multimodal reasoning.
+
+Image and scan OCR is not included. If a PDF page or a DOCX has no extractable text, the report says so and stops. Figures and charts are not interpreted. No external OCR program is called.
+
+Database schema version stays 1 in this release. A 0.1.0 database opens without migration. DOCX and PDF bytes are not stored; only the extracted plain text is stored, and only when a passage is long enough to compare.
+
+DOCX limits, in addition to the 8 MiB file cap: at most 128 zip entries, 8 MiB uncompressed per entry, and 32 MiB uncompressed in total. A DOCTYPE or ENTITY declaration in the Word XML is refused. Zip entry names that contain `..` or are absolute are skipped.
+
+## Quotations, bibliographies, and handouts
+
+A passage is set aside when it is mostly a quotation, when it follows a references or bibliography heading, or when it matches a file passed with --boilerplate. Set-aside overlap is still 4-token shingle overlap. It is not a semantic reading, and it is not listed as the main overlap evidence.
+
+`--boilerplate` compares in memory. Those files are not written to the database unless you also `corpus add` them. A whole-document exact hash match is still reported, because an entire copied file is a different signal from one shared reference entry.
+
+HTML reports are a single file with no scripts and no remote assets. Text from the draft is escaped. Opening the HTML file does not upload it.
 
 ## Limits that are easy to forget
 

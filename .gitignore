@@ -16,6 +16,7 @@
 /out/
 *.review.json
 *.review.md
+*.review.html
 
 # Secrets
 .env

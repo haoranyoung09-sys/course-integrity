@@ -9,8 +9,10 @@ use crate::error::Error;
 use crate::method::{
     BELOW_THRESHOLD_NOTE, CONTAINMENT_DENOMINATOR, DB_SCHEMA_VERSION, DOCUMENT_EXACT_NOTE,
     EXCERPT_NOTE, HASH_DESC, MAX_REPORTED_MATCHES, MIN_NORMALIZED_CHARS, MIN_SHARED_SHINGLES,
-    NOT_PLAGIARISM_LINE, PERSISTED_TEXT_NOTE, SCOPE_LINE, SELF_DESC,
+    NOT_PLAGIARISM_LINE, PERSISTED_TEXT_NOTE, SCOPE_LINE, SELF_DESC, SET_ASIDE_BIB,
+    SET_ASIDE_QUOTE, SET_ASIDE_TEMPLATE,
 };
+use crate::regions::{paragraph_roles, PassageRole};
 use crate::stats::{analyze, preview};
 use crate::tokenize::{canonical_label, score_shingles};
 
@@ -103,6 +105,8 @@ pub struct MatchHit {
     pub containment: Option<f64>,
     pub jaccard: Option<f64>,
     pub meets_threshold: bool,
+    pub source_kind: String,
+    pub set_aside: Option<&'static str>,
     pub score_note: &'static str,
     pub interpretation: &'static str,
     pub query_excerpt: String,
@@ -119,8 +123,10 @@ pub struct CorpusSection {
     pub excluded_self: Vec<ExcludedSelf>,
     pub document_exact_matches: Vec<DocumentExact>,
     pub matches: Vec<MatchHit>,
+    pub context_overlaps: Vec<MatchHit>,
     pub strongest_below_threshold: Option<MatchHit>,
     pub truncated_match_count: usize,
+    pub truncated_context_count: usize,
     pub notes: Vec<String>,
     pub persisted_text_note: &'static str,
     pub self_comparison: &'static str,
@@ -132,6 +138,41 @@ pub struct CorpusSection {
 pub struct CheckOptions {
     pub min_containment_basis_points: u32,
     pub include_self: bool,
+    pub boilerplate: Vec<BoilerplatePassage>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoilerplatePassage {
+    pub label: String,
+    pub paragraph_index: usize,
+    pub text: String,
+    pub normalized: String,
+    pub shingles: BTreeSet<String>,
+    pub comparable: bool,
+    pub exact_eligible: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RemoveOutcome {
+    pub document_id: i64,
+    pub source_label: String,
+    pub detail: String,
+}
+
+pub fn boilerplate_passages(label: &str, text: &str) -> Vec<BoilerplatePassage> {
+    crate::tokenize::passage_drafts(text)
+        .into_iter()
+        .filter(|passage| passage.exact_eligible)
+        .map(|passage| BoilerplatePassage {
+            label: canonical_label(label),
+            paragraph_index: passage.index,
+            text: passage.text,
+            normalized: passage.normalized,
+            shingles: passage.shingles,
+            comparable: passage.comparable,
+            exact_eligible: passage.exact_eligible,
+        })
+        .collect()
 }
 
 pub struct Database {
@@ -399,12 +440,35 @@ impl Database {
             ));
         }
 
+        let roles = paragraph_roles(text);
         let mut meeting = Vec::new();
+        let mut context = Vec::new();
         let mut strongest: Option<MatchHit> = None;
         if query_comparable {
             for query in &analysis.passages {
                 if !query.exact_eligible {
                     continue;
+                }
+                let structural = roles
+                    .get(query.index.saturating_sub(1))
+                    .copied()
+                    .unwrap_or(PassageRole::Prose);
+                let template = best_boilerplate(
+                    query,
+                    &options.boilerplate,
+                    options.min_containment_basis_points,
+                );
+                let set_aside = if template.is_some() {
+                    Some(SET_ASIDE_TEMPLATE)
+                } else {
+                    match structural {
+                        PassageRole::Prose => None,
+                        PassageRole::Quotation => Some(SET_ASIDE_QUOTE),
+                        PassageRole::Bibliography => Some(SET_ASIDE_BIB),
+                    }
+                };
+                if let Some(plate) = template {
+                    context.push(boilerplate_hit(query, plate));
                 }
                 for source in &stored {
                     if excluded_ids.contains(&source.document_id) {
@@ -436,8 +500,12 @@ impl Database {
                         containment: scored.containment,
                         jaccard: scored.jaccard,
                         meets_threshold: meets,
+                        source_kind: "corpus".to_string(),
+                        set_aside,
                         score_note: CONTAINMENT_DENOMINATOR,
-                        interpretation: if meets {
+                        interpretation: if let Some(reason) = set_aside {
+                            reason
+                        } else if meets {
                             NOT_PLAGIARISM_LINE
                         } else {
                             BELOW_THRESHOLD_NOTE
@@ -445,40 +513,40 @@ impl Database {
                         query_excerpt: preview(&query.text, 400),
                         source_excerpt: preview(&source.text, 400),
                     };
-                    if meets {
+                    if meets && set_aside.is_none() {
                         meeting.push(hit);
-                    } else if strongest.as_ref().is_none_or(|current| {
-                        hit.containment_basis_points.unwrap_or(0)
-                            > current.containment_basis_points.unwrap_or(0)
-                    }) {
+                    } else if meets {
+                        context.push(hit);
+                    } else if set_aside.is_none()
+                        && strongest.as_ref().is_none_or(|current| {
+                            hit.containment_basis_points.unwrap_or(0)
+                                > current.containment_basis_points.unwrap_or(0)
+                        })
+                    {
                         strongest = Some(hit);
                     }
                 }
             }
         }
 
-        meeting.sort_by(|left, right| {
-            right
-                .exact
-                .cmp(&left.exact)
-                .then_with(|| {
-                    right
-                        .containment_basis_points
-                        .unwrap_or(0)
-                        .cmp(&left.containment_basis_points.unwrap_or(0))
-                })
-                .then_with(|| left.query_paragraph_index.cmp(&right.query_paragraph_index))
-                .then_with(|| left.source_document_id.cmp(&right.source_document_id))
-                .then_with(|| {
-                    left.source_paragraph_index
-                        .cmp(&right.source_paragraph_index)
-                })
-        });
+        sort_hits(&mut meeting);
+        sort_hits(&mut context);
         let truncated_match_count = meeting.len().saturating_sub(MAX_REPORTED_MATCHES);
+        let truncated_context_count = context.len().saturating_sub(MAX_REPORTED_MATCHES);
         meeting.truncate(MAX_REPORTED_MATCHES);
-        if coverage.document_count > 0 && meeting.is_empty() && query_comparable {
+        context.truncate(MAX_REPORTED_MATCHES);
+        if coverage.document_count > 0
+            && meeting.is_empty()
+            && context.is_empty()
+            && query_comparable
+        {
             notes.push(
                 "No passage met the exact or near-exact threshold against the stored passages that were compared.".to_string(),
+            );
+        }
+        if !context.is_empty() {
+            notes.push(
+                "Some overlap was set aside because the passage is a quotation, a bibliography section, or boilerplate supplied with --boilerplate. Those rows are not treated as evidence of copied prose. The comparison is still shingle overlap, not a semantic reading.".to_string(),
             );
         }
         if !excluded_self.is_empty() && meeting.is_empty() {
@@ -496,13 +564,54 @@ impl Database {
             excluded_self,
             document_exact_matches,
             matches: meeting,
+            context_overlaps: context,
             strongest_below_threshold: strongest,
             truncated_match_count,
+            truncated_context_count,
             notes,
             persisted_text_note: PERSISTED_TEXT_NOTE,
             self_comparison: SELF_DESC,
             excerpt_note: EXCERPT_NOTE,
             hash_note: HASH_DESC,
+        })
+    }
+
+    pub fn schema_version(&self) -> Result<String, Error> {
+        self.conn
+            .query_row("SELECT value FROM meta WHERE key = 'schema'", [], |row| {
+                row.get(0)
+            })
+            .map_err(|err| db_err(&self.path, err))
+    }
+
+    pub fn remove_document(&mut self, id: i64) -> Result<RemoveOutcome, Error> {
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|err| db_err(&self.path, err))?;
+        let existed: Option<String> = tx
+            .query_row(
+                "SELECT source_label FROM documents WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|err| db_err(&self.path, err))?;
+        let Some(source_label) = existed else {
+            return Err(Error::Database {
+                path: self.path.clone(),
+                message: format!(
+                    "no document with id {id}. `corpus list` shows ids. Nothing was deleted."
+                ),
+            });
+        };
+        tx.execute("DELETE FROM documents WHERE id = ?1", [id])
+            .map_err(|err| db_err(&self.path, err))?;
+        tx.commit().map_err(|err| db_err(&self.path, err))?;
+        Ok(RemoveOutcome {
+            document_id: id,
+            source_label,
+            detail: "Deleted the stored text and its passages from this local database. No remote copy exists.".to_string(),
         })
     }
 
@@ -598,6 +707,79 @@ pub fn threshold_basis_points(value: f64) -> Result<u32, Error> {
         return Err(Error::BadThreshold(value));
     }
     Ok(points as u32)
+}
+
+fn best_boilerplate<'a>(
+    query: &crate::tokenize::PassageDraft,
+    plates: &'a [BoilerplatePassage],
+    threshold: u32,
+) -> Option<&'a BoilerplatePassage> {
+    let mut best: Option<(&BoilerplatePassage, u32)> = None;
+    for plate in plates {
+        let exact = query.exact_eligible
+            && plate.exact_eligible
+            && query.normalized == plate.normalized
+            && query.normalized.chars().count() >= MIN_NORMALIZED_CHARS;
+        let scored = score_shingles(&query.shingles, &plate.shingles);
+        let points = scored.containment_basis_points.unwrap_or(0);
+        let near = query.comparable
+            && plate.comparable
+            && scored.shared >= MIN_SHARED_SHINGLES
+            && points >= threshold;
+        if exact || near {
+            let rank = if exact { 10_000 } else { points };
+            if best.is_none_or(|(_, current)| rank > current) {
+                best = Some((plate, rank));
+            }
+        }
+    }
+    best.map(|(plate, _)| plate)
+}
+
+fn boilerplate_hit(query: &crate::tokenize::PassageDraft, plate: &BoilerplatePassage) -> MatchHit {
+    let exact = query.normalized == plate.normalized;
+    let scored = score_shingles(&query.shingles, &plate.shingles);
+    MatchHit {
+        query_paragraph_index: query.index,
+        source_document_id: 0,
+        source_label: plate.label.clone(),
+        source_paragraph_index: plate.paragraph_index,
+        exact,
+        shared_shingles: scored.shared,
+        query_shingles: scored.query_shingles,
+        source_shingles: scored.source_shingles,
+        containment_basis_points: scored.containment_basis_points,
+        jaccard_basis_points: scored.jaccard_basis_points,
+        containment: scored.containment,
+        jaccard: scored.jaccard,
+        meets_threshold: true,
+        source_kind: "boilerplate".to_string(),
+        set_aside: Some(SET_ASIDE_TEMPLATE),
+        score_note: CONTAINMENT_DENOMINATOR,
+        interpretation: SET_ASIDE_TEMPLATE,
+        query_excerpt: preview(&query.text, 400),
+        source_excerpt: preview(&plate.text, 400),
+    }
+}
+
+fn sort_hits(hits: &mut [MatchHit]) {
+    hits.sort_by(|left, right| {
+        right
+            .exact
+            .cmp(&left.exact)
+            .then_with(|| {
+                right
+                    .containment_basis_points
+                    .unwrap_or(0)
+                    .cmp(&left.containment_basis_points.unwrap_or(0))
+            })
+            .then_with(|| left.query_paragraph_index.cmp(&right.query_paragraph_index))
+            .then_with(|| left.source_document_id.cmp(&right.source_document_id))
+            .then_with(|| {
+                left.source_paragraph_index
+                    .cmp(&right.source_paragraph_index)
+            })
+    });
 }
 
 fn ensure_schema(conn: &Connection, path: &Path) -> Result<(), Error> {

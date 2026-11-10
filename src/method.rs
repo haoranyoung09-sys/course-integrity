@@ -10,7 +10,7 @@ pub const MIN_SHARED_SHINGLES: usize = 4;
 pub const MIN_NORMALIZED_CHARS: usize = 40;
 pub const MIN_DUPLICATE_SENTENCE_CHARS: usize = 20;
 pub const DEFAULT_MIN_CONTAINMENT: f64 = 0.8;
-pub const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+pub const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_REPORTED_MATCHES: usize = 20;
 pub const VOCAB_STABLE_TOKENS: usize = 80;
 pub const LENGTH_STABLE_SENTENCES: usize = 5;
@@ -31,7 +31,7 @@ pub const NOT_QUERIED_LINE: &str = "No local corpus was queried because --db was
 
 pub const SCOPE_LINE: &str = "Coverage is only this local database. It is not the web, not an institution-wide archive, and not a commercial checker corpus. This tool does not connect to Turnitin, CNKI, or any other remote service, and it does not claim to reproduce their results.";
 
-pub const PERSISTED_TEXT_NOTE: &str = "This local SQLite database stores the full original text of each added file that had a matchable passage, plus a normalized copy of each passage and its shingles. The tool does not upload that text. Do not commit the database, and do not point it at coursework you are not allowed to keep.";
+pub const PERSISTED_TEXT_NOTE: &str = "This local SQLite database stores the full original text of each added UTF-8 file that had a matchable passage, or the extracted plain text of a DOCX or PDF, plus a normalized copy of each passage and its shingles. The original DOCX or PDF bytes are not stored. The tool does not upload that text. Do not commit the database, and do not point it at coursework you are not allowed to keep.";
 
 pub const TOKENIZER_DESC: &str = "UTF-8 text is NFKC-normalized and lowercased with Unicode simple lowercase (not full casefold). A word token is a run of letters, including letters with diacritics, and an apostrophe stays inside a word when letters surround it. A numeric token is a run of ASCII digits with an optional internal decimal point or comma between digits. Each Han character, kana character, or CJK compatibility ideograph is its own token. Punctuation, symbols, emoji, and a leading byte-order mark are separators, not tokens. Digits split mixed tokens, so H2O becomes three tokens. Hyphens are separators. There is no Chinese dictionary word segmenter.";
 
@@ -67,8 +67,22 @@ pub const BELOW_THRESHOLD_NOTE: &str = "Shown for transparency only. This pair d
 
 pub const DOCUMENT_EXACT_NOTE: &str = "The normalized full text matches a stored document with a different source label. Identical normalized text is a descriptive overlap signal, not a plagiarism verdict and not proof of who copied whom.";
 
+pub const EXTRACTION_DESC: &str = "DOCX text is read from word/document.xml and from word header and footer XML. Paragraph locations name that file and the paragraph number. PDF text is read from each page's text layer, and locations name the page. Images, drawings, charts, text boxes, and legacy .doc files are not read. A Word or PDF file is text extraction, not multimodal reasoning.";
+
+pub const OCR_DEFERRED: &str = "Image and scan OCR is not included. If a PDF page or a DOCX has no extractable text, the report says so and stops. Figures and charts are not interpreted. No external OCR program is called.";
+
+pub const SET_ASIDE_DESC: &str = "A passage is set aside when it is mostly a quotation, when it follows a references or bibliography heading, or when it matches a file passed with --boilerplate. Set-aside overlap is still 4-token shingle overlap. It is not a semantic reading, and it is not listed as the main overlap evidence.";
+
+pub const SET_ASIDE_QUOTE: &str = "Set aside because the passage is mostly a quotation or a Markdown block quote. Shared quotations are not treated as evidence of copied prose. This is still 4-token shingle overlap, not a reading of meaning.";
+
+pub const SET_ASIDE_BIB: &str = "Set aside because the passage sits under a references or bibliography heading. Matching references are not treated as evidence of copied prose. This is still 4-token shingle overlap, not a reading of meaning.";
+
+pub const SET_ASIDE_TEMPLATE: &str = "Set aside because the passage matches a file passed with --boilerplate. Handout and template wording is not treated as evidence of copied prose. This is still 4-token shingle overlap, not a reading of meaning.";
+
+pub const DB_COMPAT: &str = "Database schema version stays 1 in this release. A 0.1.0 database opens without migration. DOCX and PDF bytes are not stored; only the extracted plain text is stored, and only when a passage is long enough to compare.";
+
 pub const LIMITATIONS: &[&str] = &[
-    "This version reads UTF-8 .txt and .md only. DOCX and PDF are not parsed.",
+    "DOCX and text-based PDF are extracted to plain text. Legacy .doc, scanned pages, images, and charts are not read. OCR is not included.",
     "No trained model is included, and none of the figures is a probability of AI use.",
     "Chinese text is tokenized per character. There is no dictionary word segmenter.",
     "Near-exact matching uses 4-token shingles. Paraphrase, summary, and translation are not detected.",
@@ -112,6 +126,10 @@ mod tests {
             DISCLAIMER,
             NO_OVERALL_SCORE,
             EXCERPT_NOTE,
+            EXTRACTION_DESC,
+            OCR_DEFERRED,
+            SET_ASIDE_DESC,
+            DB_COMPAT,
         ] {
             assert!(
                 methodology.contains(required),

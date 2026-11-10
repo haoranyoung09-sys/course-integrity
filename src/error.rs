@@ -35,12 +35,17 @@ pub enum Error {
         path: PathBuf,
         found: String,
     },
+    Extract {
+        path: PathBuf,
+        message: String,
+    },
+    Output(String),
 }
 
 impl Error {
     pub fn exit_code(&self) -> i32 {
         match self {
-            Error::BadThreshold(_) => 2,
+            Error::BadThreshold(_) | Error::Output(_) => 2,
             _ => 1,
         }
     }
@@ -56,32 +61,40 @@ impl fmt::Display for Error {
             Error::Io { path: None, source } => write!(f, "{source}"),
             Error::NotUtf8 { path } => write!(
                 f,
-                "{}: not valid UTF-8; this version reads only UTF-8 .txt and .md files",
+                "{}: not valid UTF-8. .txt and .md must be UTF-8. For Word, use .docx rather than renaming a binary file.",
                 path.display()
             ),
             Error::TooLarge { path, bytes } => write!(
                 f,
-                "{}: file is {bytes} bytes, over the {} byte limit for this version",
+                "{}: file is {bytes} bytes, over the {} byte limit. Split the draft or export a smaller PDF.",
                 path.display(),
                 crate::method::MAX_FILE_BYTES
             ),
             Error::Unsupported { path } => write!(
                 f,
-                "{}: only UTF-8 .txt and .md files are supported in this version (DOCX and PDF are not read)",
+                "{}: unsupported type. This version reads UTF-8 .txt, .md, .docx, and text-based .pdf. Legacy .doc is not read.",
                 path.display()
             ),
             Error::NoInputs { path, detail } => {
                 if detail.is_empty() {
-                    write!(f, "{}: no .txt or .md files found", path.display())
+                    write!(
+                        f,
+                        "{}: no .txt, .md, .docx, or .pdf files found",
+                        path.display()
+                    )
                 } else {
                     write!(
                         f,
-                        "{}: no .txt or .md files found. {detail}",
+                        "{}: no readable .txt, .md, .docx, or .pdf files found. {detail}",
                         path.display()
                     )
                 }
             }
-            Error::NotFound { path } => write!(f, "{}: not found", path.display()),
+            Error::NotFound { path } => write!(
+                f,
+                "{}: not found. Pass a .txt, .md, .docx, or .pdf file, or a folder that contains them.",
+                path.display()
+            ),
             Error::Database { path, message } => {
                 write!(f, "{}: {message}", path.display())
             }
@@ -101,6 +114,8 @@ impl fmt::Display for Error {
                 path.display(),
                 crate::method::DB_SCHEMA_VERSION
             ),
+            Error::Extract { path, message } => write!(f, "{}: {message}", path.display()),
+            Error::Output(message) => write!(f, "{message}"),
         }
     }
 }

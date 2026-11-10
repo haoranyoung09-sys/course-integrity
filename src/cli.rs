@@ -5,20 +5,23 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
-use crate::corpus::{threshold_basis_points, AddOutcome, CheckOptions, Database};
+use crate::corpus::{
+    boilerplate_passages, threshold_basis_points, AddOutcome, CheckOptions, Database,
+};
 use crate::error::Error;
 use crate::files::load_inputs;
+use crate::html::render_html;
 use crate::method::{
     CORPUS_SCHEMA, DEFAULT_MIN_CONTAINMENT, DISCLAIMER, PERSISTED_TEXT_NOTE, PRODUCT,
 };
-use crate::report::{bundle, render_json, render_markdown, review_file, Bundle};
+use crate::report::{bundle, render_json, render_markdown, review_file, Bundle, ReviewInput};
 
 #[derive(Parser)]
 #[command(
     name = "course-integrity",
     version,
     about = "Local-first coursework integrity precheck (descriptive signals only)",
-    long_about = "Scan UTF-8 .txt and .md drafts and, if you pass --db, compare them with a local SQLite corpus you build yourself.\n\nReports describe sentence length, repetition, vocabulary, transition phrases, and exact or near-exact local overlap.\n\nThese are descriptive review signals. They are not an AI probability, not a calibrated risk score, and not a plagiarism verdict. The tool does not use the network.",
+    long_about = "Scan UTF-8 .txt and .md drafts, .docx files, and text-based PDFs. If you pass --db, compare them with a local SQLite corpus you build yourself.\n\nReports describe sentence length, repetition, vocabulary, transition phrases, and exact or near-exact local overlap. HTML, Markdown, and JSON are offline reports.\n\nThese are descriptive review signals. They are not an AI probability, not a calibrated risk score, and not a plagiarism verdict. The tool does not use the network. OCR is not included.",
     arg_required_else_help = true
 )]
 struct Cli {
@@ -37,21 +40,23 @@ enum Command {
 
 #[derive(Subcommand)]
 enum CorpusCommand {
-    /// Store UTF-8 .txt or .md files in a local database.
+    /// Store .txt, .md, .docx, or text-based .pdf files in a local database.
     Add(AddArgs),
     /// Same report as `scan --db`.
     Check(ScanArgs),
     /// List stored documents without printing their text.
     List(DbArgs),
+    /// Delete one stored document and its text from the local database.
+    Remove(RemoveArgs),
     /// Show how much text this local database covers.
     Stats(DbArgs),
 }
 
 #[derive(Parser)]
 struct ScanArgs {
-    /// File or directory of UTF-8 .txt and .md drafts.
+    /// File or directory of .txt, .md, .docx, or text-based .pdf drafts.
     path: PathBuf,
-    /// markdown, json, or both.
+    /// markdown, json, html, or all. `all` requires --out-dir.
     #[arg(long, value_enum, default_value_t = ReportFormat::Markdown)]
     format: ReportFormat,
     /// Write the report files into this directory.
@@ -69,11 +74,14 @@ struct ScanArgs {
     /// Also compare against stored rows that use this source label.
     #[arg(long)]
     include_self: bool,
+    /// Handout or template. Matches against these files are set aside, and the files are not stored.
+    #[arg(long = "boilerplate", value_name = "PATH")]
+    boilerplate: Vec<PathBuf>,
 }
 
 #[derive(Parser)]
 struct AddArgs {
-    /// File or directory of UTF-8 .txt and .md files to store.
+    /// File or directory of .txt, .md, .docx, or text-based .pdf files to store.
     path: PathBuf,
     /// Local SQLite database path. This file will contain the full text.
     #[arg(long, value_name = "PATH")]
@@ -81,6 +89,19 @@ struct AddArgs {
     /// Label for a single file. Directory entries keep their paths as labels.
     #[arg(long)]
     label: Option<String>,
+    /// text or json.
+    #[arg(long, value_enum, default_value_t = PlainFormat::Text)]
+    format: PlainFormat,
+}
+
+#[derive(Parser)]
+struct RemoveArgs {
+    /// Local SQLite database path.
+    #[arg(long, value_name = "PATH")]
+    db: PathBuf,
+    /// Document id from `corpus list`.
+    #[arg(long)]
+    id: i64,
     /// text or json.
     #[arg(long, value_enum, default_value_t = PlainFormat::Text)]
     format: PlainFormat,
@@ -101,7 +122,8 @@ enum ReportFormat {
     #[default]
     Markdown,
     Json,
-    Both,
+    Html,
+    All,
 }
 
 #[derive(Clone, Copy, ValueEnum, Default)]
@@ -136,15 +158,15 @@ fn dispatch(cli: Cli) -> Result<(), Error> {
         Command::Scan(args) => scan(args),
         Command::Corpus(CorpusCommand::Check(args)) => {
             if args.db.is_none() {
-                return Err(Error::Database {
-                    path: PathBuf::from("--db"),
-                    message: "corpus check requires --db PATH".to_string(),
-                });
+                return Err(Error::Output(
+                    "corpus check needs --db PATH. Example: course-integrity corpus check draft.docx --db .course-integrity/corpus.db".to_string(),
+                ));
             }
             scan(args)
         }
         Command::Corpus(CorpusCommand::Add(args)) => add(args),
         Command::Corpus(CorpusCommand::List(args)) => list(args),
+        Command::Corpus(CorpusCommand::Remove(args)) => remove(args),
         Command::Corpus(CorpusCommand::Stats(args)) => stats(args),
     }
 }
@@ -152,6 +174,16 @@ fn dispatch(cli: Cli) -> Result<(), Error> {
 fn scan(args: ScanArgs) -> Result<(), Error> {
     let threshold = threshold_basis_points(args.min_containment)?;
     let loaded = load_inputs(&args.path, args.label.as_deref())?;
+    let mut boilerplate = Vec::new();
+    for path in &args.boilerplate {
+        let handout = load_inputs(path, None)?;
+        for file in handout.files {
+            boilerplate.extend(boilerplate_passages(&file.label, &file.text));
+        }
+        for warning in handout.warnings {
+            eprintln!("warning: {warning}");
+        }
+    }
     let mut database = match &args.db {
         Some(path) => Some(Database::open(path)?),
         None => None,
@@ -165,12 +197,21 @@ fn scan(args: ScanArgs) -> Result<(), Error> {
                 &CheckOptions {
                     min_containment_basis_points: threshold,
                     include_self: args.include_self,
+                    boilerplate: boilerplate.clone(),
                 },
             )?)
         } else {
             None
         };
-        files.push(review_file(&file.label, &file.text, file.bytes, corpus));
+        files.push(review_file(ReviewInput {
+            label: &file.label,
+            text: &file.text,
+            bytes: file.bytes,
+            origin: &file.origin,
+            extraction_notes: &file.diagnostics,
+            paragraph_locations: &file.locations,
+            corpus,
+        }));
     }
     let report = bundle(loaded.warnings, files);
     emit_report(&args.path, args.format, args.out_dir.as_deref(), &report)
@@ -182,39 +223,43 @@ fn emit_report(
     out_dir: Option<&Path>,
     report: &Bundle,
 ) -> Result<(), Error> {
+    if matches!(format, ReportFormat::All) && out_dir.is_none() {
+        return Err(Error::Output(
+            "--format all writes Markdown, HTML, and JSON files. Pass --out-dir DIR. A single format can still be printed to the terminal, for example --format html.".to_string(),
+        ));
+    }
     let json = render_json(report)?;
     let markdown = render_markdown(report);
+    let html = render_html(report);
     if let Some(dir) = out_dir {
         fs::create_dir_all(dir).map_err(|source| Error::Io {
             path: Some(dir.to_path_buf()),
             source,
         })?;
         let stem = output_stem(input);
-        if matches!(format, ReportFormat::Markdown | ReportFormat::Both) {
-            let path = dir.join(format!("{stem}.review.md"));
-            write_file(&path, &markdown)?;
+        if matches!(format, ReportFormat::Markdown | ReportFormat::All) {
+            write_report(dir, &stem, "md", &markdown)?;
         }
-        if matches!(format, ReportFormat::Json | ReportFormat::Both) {
-            let path = dir.join(format!("{stem}.review.json"));
-            write_file(&path, &json)?;
+        if matches!(format, ReportFormat::Html | ReportFormat::All) {
+            write_report(dir, &stem, "html", &html)?;
+        }
+        if matches!(format, ReportFormat::Json | ReportFormat::All) {
+            write_report(dir, &stem, "json", &json)?;
         }
     }
     match format {
         ReportFormat::Markdown => print!("{markdown}"),
         ReportFormat::Json => print!("{json}"),
-        ReportFormat::Both => {
-            if let Some(dir) = out_dir {
-                let stem = output_stem(input);
-                println!(
-                    "wrote {}/{stem}.review.md and {}/{stem}.review.json",
-                    dir.display(),
-                    dir.display()
-                );
-            } else {
-                print!("{markdown}\n---\n{json}");
-            }
-        }
+        ReportFormat::Html => print!("{html}"),
+        ReportFormat::All => {}
     }
+    Ok(())
+}
+
+fn write_report(dir: &Path, stem: &str, extension: &str, contents: &str) -> Result<(), Error> {
+    let path = dir.join(format!("{stem}.review.{extension}"));
+    write_file(&path, contents)?;
+    eprintln!("wrote {}", path.display());
     Ok(())
 }
 
@@ -267,6 +312,24 @@ fn print_add(result: &AddOutcome) {
     println!("stored_passages: {}", result.stored_passages);
     println!("detail: {}", result.detail);
     println!();
+}
+
+fn remove(args: RemoveArgs) -> Result<(), Error> {
+    let mut database = Database::open(&args.db)?;
+    let outcome = database.remove_document(args.id)?;
+    match args.format {
+        PlainFormat::Json => {
+            println!("{}", serde_json_pretty(&outcome)?);
+        }
+        PlainFormat::Text => {
+            println!("database: {}", args.db.display());
+            println!("status: removed");
+            println!("document_id: {}", outcome.document_id);
+            println!("source_label: {}", outcome.source_label);
+            println!("detail: {}", outcome.detail);
+        }
+    }
+    Ok(())
 }
 
 fn list(args: DbArgs) -> Result<(), Error> {
