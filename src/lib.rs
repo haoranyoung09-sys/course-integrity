@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+mod artifacts;
 pub mod cli;
 mod corpus;
 mod error;

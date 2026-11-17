@@ -1,3 +1,4 @@
+use crate::artifacts::show_text;
 use crate::report::Bundle;
 
 pub(crate) fn render_html(bundle: &Bundle) -> String {
@@ -61,6 +62,7 @@ fn render_file(out: &mut String, file: &crate::report::FileReview) {
         }
         out.push_str("</ul></section>\n");
     }
+    render_artifacts(out, file);
     out.push_str("<section><h3>How to read the counts</h3><ul>");
     for note in &file.notes {
         out.push_str("<li>");
@@ -148,6 +150,7 @@ fn render_file(out: &mut String, file: &crate::report::FileReview) {
         file.method.ocr,
         file.method.set_aside,
         file.method.database_compatibility,
+        file.method.artifacts,
     ] {
         out.push_str("<li>");
         out.push_str(&escape(line));
@@ -159,6 +162,48 @@ fn render_file(out: &mut String, file: &crate::report::FileReview) {
         out.push_str("</li>");
     }
     out.push_str("</ul></details>\n</article>\n");
+}
+
+fn render_artifacts(out: &mut String, file: &crate::report::FileReview) {
+    let report = &file.artifacts;
+    out.push_str("<section><h3>Hidden characters and newlines</h3>");
+    out.push_str("<p class=\"quiet\">");
+    out.push_str(&escape(&format!(
+        "Scope: {}. Newline style: {}.",
+        report.scope, report.newline_style
+    )));
+    out.push_str("</p><ul>");
+    for note in &report.notes {
+        out.push_str("<li>");
+        out.push_str(&escape(note));
+        out.push_str("</li>");
+    }
+    out.push_str("</ul>");
+    if report.findings.is_empty() {
+        out.push_str("<p>No listed artifacts.</p></section>\n");
+        return;
+    }
+    out.push_str("<ul>");
+    for finding in &report.findings {
+        out.push_str("<li><code>");
+        out.push_str(&escape(&format!(
+            "{} {} line {} column {}",
+            finding.kind, finding.code_point, finding.line, finding.column
+        )));
+        out.push_str("</code> ");
+        out.push_str(&escape(&finding.excerpt));
+        out.push_str("</li>");
+    }
+    out.push_str("</ul>");
+    if report.truncated_count > 0 {
+        out.push_str("<p class=\"quiet\">");
+        out.push_str(&escape(&format!(
+            "{} further artifacts were omitted.",
+            report.truncated_count
+        )));
+        out.push_str("</p>");
+    }
+    out.push_str("</section>\n");
 }
 
 fn render_corpus(out: &mut String, file: &crate::report::FileReview) {
@@ -241,8 +286,9 @@ fn fmt_opt(value: Option<f64>) -> String {
 }
 
 fn escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
+    let shown = show_text(text);
+    let mut out = String::with_capacity(shown.len());
+    for ch in shown.chars() {
         match ch {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),

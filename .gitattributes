@@ -1,1 +1,2 @@
 * text=auto eol=lf
+fixtures/synthetic/hidden-marks.txt text eol=crlf

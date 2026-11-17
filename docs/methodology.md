@@ -98,7 +98,15 @@ A passage is set aside when it is mostly a quotation, when it follows a referenc
 
 `--boilerplate` compares in memory. Those files are not written to the database unless you also `corpus add` them. A whole-document exact hash match is still reported, because an entire copied file is a different signal from one shared reference entry.
 
-HTML reports are a single file with no scripts and no remote assets. Text from the draft is escaped. Opening the HTML file does not upload it.
+HTML reports are a single file with no scripts and no remote assets. Text from the draft is escaped. Bidirectional controls and other hidden characters are written as `U+` code points so they cannot reorder the page. Opening the HTML file does not upload it.
+
+## Hidden characters and newlines
+
+Hidden-character and newline notes are a deterministic inventory of code points and line breaks in the text that was read. They are not an AI-generation rate, not a plagiarism verdict, and not evidence of who typed the file. A red/green token watermark can be checked only when the exact scheme, tokenizer, key, and parameters are supplied. This tool does not have those parameters and does not guess a watermark.
+
+For DOCX and PDF, this inventory looks at extracted text only. The extractor inserts paragraph breaks, so newline style is not reported for those formats. A missing or odd character can be an extraction limit, including a PDF font encoding, rather than something that was typed.
+
+The inventory lists a byte order mark, CRLF and bare CR in UTF-8 files, trailing ASCII spaces or tabs, no-break spaces, zero-width characters, bidi controls, and a few other format characters. Ideographic spaces (U+3000) are counted in a note and are not treated as hidden controls. The scan does not change the file.
 
 ## Limits that are easy to forget
 

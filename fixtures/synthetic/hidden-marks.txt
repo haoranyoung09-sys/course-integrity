@@ -1,0 +1,4 @@
+Synthetic fixture. Not a student submission.
+The temperature was 60 C. 
+NBSP and zero​width and bidi‮mark.
+结果正常，没有隐藏控制符。
