@@ -1,11 +1,12 @@
 use serde::Serialize;
 
+use crate::artifacts::{audit_text, show_text, ArtifactReport};
 use crate::corpus::CorpusSection;
 use crate::method::{
-    CONTAINMENT_DENOMINATOR, COUNT_STREAMS, DB_COMPAT, DISCLAIMER, EXACT_DESC, EXTRACTION_DESC,
-    HASH_DESC, JACCARD_DESC, LENGTH_UNIT_NOTE, LIMITATIONS, NOT_QUERIED_LINE, NO_OVERALL_SCORE,
-    OCR_DEFERRED, PRODUCT, REPETITION_NOTE, SCHEMA, SELF_DESC, SET_ASIDE_DESC, SHINGLE_DESC,
-    TOKENIZER_DESC, TRANSITION_NOTE, UNICODE_DESC, VOCAB_NOTE,
+    ARTIFACT_DESC, CONTAINMENT_DENOMINATOR, COUNT_STREAMS, DB_COMPAT, DISCLAIMER, EXACT_DESC,
+    EXTRACTION_DESC, HASH_DESC, JACCARD_DESC, LENGTH_UNIT_NOTE, LIMITATIONS, NOT_QUERIED_LINE,
+    NO_OVERALL_SCORE, OCR_DEFERRED, PRODUCT, REPETITION_NOTE, SCHEMA, SELF_DESC, SET_ASIDE_DESC,
+    SHINGLE_DESC, TOKENIZER_DESC, TRANSITION_NOTE, UNICODE_DESC, VOCAB_NOTE,
 };
 use crate::stats::{analyze, DocumentStats, Evidence, ParagraphStats};
 
@@ -37,6 +38,7 @@ pub struct MethodStamp {
     pub ocr: &'static str,
     pub set_aside: &'static str,
     pub database_compatibility: &'static str,
+    pub artifacts: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,6 +54,7 @@ pub struct FileReview {
     pub limitations: &'static [&'static str],
     pub document: DocumentStats,
     pub paragraphs: Vec<ParagraphStats>,
+    pub artifacts: ArtifactReport,
     pub corpus: Option<CorpusSection>,
 }
 
@@ -98,6 +101,7 @@ pub(crate) fn review_file(input: ReviewInput<'_>) -> FileReview {
         limitations: LIMITATIONS,
         document: analysis.document,
         paragraphs: analysis.paragraphs,
+        artifacts: audit_text(input.text, input.origin),
         corpus: input.corpus,
     }
 }
@@ -133,6 +137,7 @@ fn method_stamp() -> MethodStamp {
         ocr: OCR_DEFERRED,
         set_aside: SET_ASIDE_DESC,
         database_compatibility: DB_COMPAT,
+        artifacts: ARTIFACT_DESC,
     }
 }
 
@@ -181,6 +186,7 @@ fn render_file(out: &mut String, file: &FileReview) {
         file.input.characters,
         if file.input.bom_stripped { "yes" } else { "no" }
     ));
+    render_artifacts(out, file);
     if !file.extraction_notes.is_empty() {
         out.push_str("### What was read\n\n");
         for note in &file.extraction_notes {
@@ -241,6 +247,7 @@ fn render_file(out: &mut String, file: &FileReview) {
         file.method.ocr,
         file.method.set_aside,
         file.method.database_compatibility,
+        file.method.artifacts,
     ] {
         out.push_str(&format!("- {line}\n"));
     }
@@ -430,9 +437,44 @@ fn render_hit(out: &mut String, hit: &crate::corpus::MatchHit) {
         fmt_points(hit.jaccard_basis_points),
         hit.score_note,
         hit.interpretation,
-        hit.query_excerpt,
-        hit.source_excerpt
+        show_text(&hit.query_excerpt),
+        show_text(&hit.source_excerpt)
     ));
+}
+
+fn render_artifacts(out: &mut String, file: &FileReview) {
+    let report = &file.artifacts;
+    out.push_str("### Hidden characters and newlines\n\n");
+    out.push_str(&format!(
+        "Scope: {}. Newline style: {}.\n\n",
+        report.scope, report.newline_style
+    ));
+    for note in &report.notes {
+        out.push_str(&format!("- {}\n", show_text(note)));
+    }
+    out.push('\n');
+    if report.findings.is_empty() {
+        out.push_str("No listed artifacts.\n\n");
+        return;
+    }
+    for finding in &report.findings {
+        out.push_str(&format!(
+            "- {} {} at line {}, column {} (character {}). Excerpt: {}\n",
+            finding.kind,
+            finding.code_point,
+            finding.line,
+            finding.column,
+            finding.char_index,
+            finding.excerpt
+        ));
+    }
+    if report.truncated_count > 0 {
+        out.push_str(&format!(
+            "\n{} further artifacts were omitted from this list.\n",
+            report.truncated_count
+        ));
+    }
+    out.push('\n');
 }
 
 fn fmt_opt(value: Option<f64>) -> String {

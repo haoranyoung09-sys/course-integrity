@@ -121,6 +121,35 @@ fn docx_and_pdf_smoke_mentions_locations_and_limits() {
 }
 
 #[test]
+fn hidden_marks_are_located_and_the_file_is_not_rewritten() {
+    let path = "fixtures/synthetic/hidden-marks.txt";
+    let before = fs::read(path).unwrap();
+    let output = run(&["scan", path, "--format", "json"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(fs::read(path).unwrap(), before);
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let artifacts = &value["files"][0]["artifacts"];
+    assert_eq!(artifacts["newline_style"], "mixed");
+    let findings = artifacts["findings"].as_array().unwrap();
+    assert!(findings
+        .iter()
+        .any(|item| item["kind"] == "crlf" && item["line"] == 1));
+    assert!(findings.iter().any(|item| item["kind"] == "nbsp"));
+    assert!(findings.iter().any(|item| item["kind"] == "zero_width"));
+    assert!(findings.iter().any(|item| item["code_point"] == "U+202E"));
+    let html = run(&["scan", path, "--format", "html"]);
+    assert!(html.status.success());
+    let page = String::from_utf8_lossy(&html.stdout);
+    assert!(!page.contains('\u{202E}'));
+    assert!(page.contains("U+202E"));
+    assert!(page.contains("not an AI-generation rate"));
+}
+
+#[test]
 fn synthetic_batch_of_forty_files_finishes_quickly_in_debug() {
     let dir = std::env::temp_dir().join(format!("course-integrity-batch-{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);

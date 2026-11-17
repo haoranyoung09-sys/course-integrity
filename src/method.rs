@@ -81,6 +81,10 @@ pub const SET_ASIDE_TEMPLATE: &str = "Set aside because the passage matches a fi
 
 pub const DB_COMPAT: &str = "Database schema version stays 1 in this release. A 0.1.0 database opens without migration. DOCX and PDF bytes are not stored; only the extracted plain text is stored, and only when a passage is long enough to compare.";
 
+pub const ARTIFACT_DESC: &str = "Hidden-character and newline notes are a deterministic inventory of code points and line breaks in the text that was read. They are not an AI-generation rate, not a plagiarism verdict, and not evidence of who typed the file. A red/green token watermark can be checked only when the exact scheme, tokenizer, key, and parameters are supplied. This tool does not have those parameters and does not guess a watermark.";
+
+pub const ARTIFACT_EXTRACTED: &str = "For DOCX and PDF, this inventory looks at extracted text only. The extractor inserts paragraph breaks, so newline style is not reported for those formats. A missing or odd character can be an extraction limit, including a PDF font encoding, rather than something that was typed.";
+
 pub const LIMITATIONS: &[&str] = &[
     "DOCX and text-based PDF are extracted to plain text. Legacy .doc, scanned pages, images, and charts are not read. OCR is not included.",
     "No trained model is included, and none of the figures is a probability of AI use.",
@@ -130,6 +134,8 @@ mod tests {
             OCR_DEFERRED,
             SET_ASIDE_DESC,
             DB_COMPAT,
+            ARTIFACT_DESC,
+            ARTIFACT_EXTRACTED,
         ] {
             assert!(
                 methodology.contains(required),
