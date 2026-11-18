@@ -5,9 +5,9 @@
 [![声明的 Rust 版本为 1.83 或更高。CI 使用 1.83.0](https://img.shields.io/badge/Rust-1.83%2B-000000?logo=rust&logoColor=white)](Cargo.toml)
 [![CI：cargo fmt、cargo test 与 cargo clippy](https://github.com/haoranyoung09-sys/course-integrity/actions/workflows/ci.yml/badge.svg)](https://github.com/haoranyoung09-sys/course-integrity/actions/workflows/ci.yml)
 [![许可证 MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![仓库内 crate 版本 0.3.0。未发布到 crates.io，也没有 GitHub release](https://img.shields.io/badge/version-0.3.0%20source%20only-lightgrey)](Cargo.toml)
+[![仓库内 crate 版本 0.4.0。未发布到 crates.io，也没有 GitHub release](https://img.shields.io/badge/version-0.4.0%20source%20only-lightgrey)](Cargo.toml)
 
-`course-integrity` 0.3.0 是一个**本地**的课程作业预检小工具，面向英语授课的本科写作、实验报告和小组讨论草稿，并直接处理中文。它读取 UTF-8 的 `.txt` / `.md`，并从 `.docx` 和带文字层的 PDF 里抽出文字。它也会列出隐藏字符和不寻常的换行。扫描件、图片和图表不会识别，也没有 OCR。
+`course-integrity` 0.4.0 是一个**本地**的课程作业预检小工具，面向英语授课的本科写作、实验报告和小组讨论草稿，并直接处理中文。它读取 UTF-8 的 `.txt` / `.md`，并从 `.docx` 和带文字层的 PDF 里抽出文字。它也会列出隐藏字符和不寻常的换行。扫描件、图片和图表不会识别，也没有 OCR。
 
 语料比对和字符清单都不是 AI 检测。红绿词元水印只有在拿到确切方案、分词器、密钥和参数时才能核验。这个程序没有这些参数，也不会去猜一种水印。
 
@@ -36,7 +36,34 @@ cargo build --locked --release
 ./target/release/course-integrity --help
 ```
 
-许可证是 [MIT](LICENSE)。版本号 0.3.0 只写在 `Cargo.toml` 里。`publish = false`。没有 crates.io 发布，也没有 GitHub release 标签。
+许可证是 [MIT](LICENSE)。版本号 0.4.0 只写在 `Cargo.toml` 里。`publish = false`。没有 crates.io 发布，也没有 GitHub release 标签。
+
+## 可选的本地分类器
+
+这和隐藏字符清单、本地语料重合是分开的。那些信号不会被换算成 AI 率。
+
+分数旁边的名称是：AI 模型分类分数（未校准） / AI classifier score (uncalibrated)
+
+This number is the softmax of class index 1, scaled from 0 to 100. Class index 0 is human and class index 1 is AI in the official AIGC v3 demo and training code. It is not the percentage of this text that was written by AI, and it is not a calibrated probability of authorship.
+
+中文意思：这个数字是类别 1 的 softmax，换算到 0–100。官方 v3 演示和训练代码里，类别 0 是人类，类别 1 是 AI。它不是“这段文字有百分之多少由 AI 写成”，也不是校准过的作者概率。
+
+普通扫描不会下载模型。需要时才执行：
+
+```bash
+python3 -m venv .course-integrity/venv
+. .course-integrity/venv/bin/activate
+python -m pip install "torch==2.5.1+cpu" --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -r classifier/requirements.txt
+python classifier/setup_models.py --dest .course-integrity/models
+export PATH="$PWD/.course-integrity/venv/bin:$PATH"
+cargo run --locked -- scan examples/lab-report-zh.md --ai-classify --ai-models .course-integrity/models
+cargo run --locked -- scan examples/lab-report-en.md --ai-classify --ai-models .course-integrity/models
+```
+
+英文模型是 `yuchuantian/AIGC_detector_env3`，修订 `3ceb1d1bb7b9ca11585ce3f4299950e1c465b6d8`。中文模型是 `yuchuantian/AIGC_detector_zhv3`，修订 `47695ff451b32c225dd938f4f478f7fdc6aa6bb0`。模型卡写的是 Apache-2.0。安装时用 `weights_only=True` 把 `pytorch_model.bin` 转成 `model.safetensors`，然后删掉 pickle 文件。之后推理不再联网。模型不在时，报告是 `not_run`，不给数字，也不写成 0%。
+
+每个窗口最多 512 个 token，和作者演示里的 `max_length` 一样。窗口分数不会被平均成整篇的 AI 百分比。合成示例的一次 CPU 实测写在 [docs/classifier-smoke.md](docs/classifier-smoke.md)。那些数字不是准确率。`scripts/demo.sh` 不加 `--ai-classify`，所以默认演示报告是 `not_run`。
 
 ## 演示
 

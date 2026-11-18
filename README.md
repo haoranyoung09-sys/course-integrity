@@ -5,7 +5,7 @@
 [![Declared Rust version 1.83 or newer. CI tests toolchain 1.83.0](https://img.shields.io/badge/Rust-1.83%2B-000000?logo=rust&logoColor=white)](Cargo.toml)
 [![CI status for cargo fmt, cargo test, and cargo clippy](https://github.com/haoranyoung09-sys/course-integrity/actions/workflows/ci.yml/badge.svg)](https://github.com/haoranyoung09-sys/course-integrity/actions/workflows/ci.yml)
 [![License MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Crate version 0.3.0 in this repository. Not published to crates.io and not a GitHub release](https://img.shields.io/badge/version-0.3.0%20source%20only-lightgrey)](Cargo.toml)
+[![Crate version 0.4.0 in this repository. Not published to crates.io and not a GitHub release](https://img.shields.io/badge/version-0.4.0%20source%20only-lightgrey)](Cargo.toml)
 
 Local-first coursework integrity **precheck** for English-medium undergraduate writing, including lab reports and group discussion drafts, with Chinese text supported in the same command.
 
@@ -19,7 +19,7 @@ Corpus comparison and the character inventory are not AI detection. A red/green 
 
 This is not Turnitin, CNKI, or a replacement for either. It does not connect to them, it does not contain their corpora, and it does not claim to reproduce their results. It does not use the network.
 
-## What 0.3.0 actually does
+## What 0.4.0 actually does
 
 | Capability | Status |
 | --- | --- |
@@ -32,7 +32,8 @@ This is not Turnitin, CNKI, or a replacement for either. It does not connect to 
 | Markdown, JSON, and offline HTML | Written locally. HTML has no scripts and no remote assets |
 | Local SQLite corpus | Schema version 1, unchanged since 0.1.0. Only extracted plain text is stored for DOCX and PDF |
 | Quotations, bibliographies, `--boilerplate` | Shown under "set aside". Still shingle overlap, not a meaning comparison |
-| Network, crates.io release, GitHub release | Not used. `publish = false` |
+| Optional local AI classifier | Off unless `--ai-classify`. Per-chunk uncalibrated softmax, not an AI-written percentage |
+| Network, crates.io release, GitHub release | Not used by a scan. Model setup is a separate explicit download. `publish = false` |
 
 `rust-version` in `Cargo.toml` is 1.83, and CI installs Rust 1.83.0. That is the declared and tested floor. Older compilers were not measured.
 
@@ -164,6 +165,31 @@ cargo clippy --locked --all-targets -- -D warnings
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
+## Optional local classifier
+
+This is separate from the hidden-character inventory and from corpus overlap. It does not turn those into an AI rate.
+
+The label printed next to every score is: AI 模型分类分数（未校准） / AI classifier score (uncalibrated)
+
+This number is the softmax of class index 1, scaled from 0 to 100. Class index 0 is human and class index 1 is AI in the official AIGC v3 demo and training code. It is not the percentage of this text that was written by AI, and it is not a calibrated probability of authorship.
+
+Install and download are explicit. A normal scan does not do either:
+
+```bash
+python3 -m venv .course-integrity/venv
+. .course-integrity/venv/bin/activate
+python -m pip install "torch==2.5.1+cpu" --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -r classifier/requirements.txt
+python classifier/setup_models.py --dest .course-integrity/models
+export PATH="$PWD/.course-integrity/venv/bin:$PATH"
+cargo run --locked -- scan examples/lab-report-en.md --ai-classify --ai-models .course-integrity/models
+cargo run --locked -- scan examples/lab-report-zh.md --ai-classify --ai-models .course-integrity/models
+```
+
+English uses `yuchuantian/AIGC_detector_env3` at revision `3ceb1d1bb7b9ca11585ce3f4299950e1c465b6d8`. Chinese uses `yuchuantian/AIGC_detector_zhv3` at revision `47695ff451b32c225dd938f4f478f7fdc6aa6bb0`. Both cards say Apache-2.0. Setup converts `pytorch_model.bin` with `torch.load(..., weights_only=True)` into `model.safetensors` and deletes the pickle file. Inference then stays offline. If the model is missing, the report says `not_run` and shows no number. That is not 0%.
+
+Scores are per token-window, up to 512 tokens, which is the limit in the author's demo. They are not averaged into one document percentage. See [docs/methodology.md](docs/methodology.md). One CPU run on the synthetic examples, with the measured scores and the commands that produced them, is in [docs/classifier-smoke.md](docs/classifier-smoke.md). Those numbers are not an accuracy claim. The default demo in `scripts/demo.sh` does not pass `--ai-classify`, so its reports stay `not_run`.
+
 ## Version
 
-0.3.0 in `Cargo.toml`. This crate is `publish = false`. It is not on crates.io, and this repository has no release tag.
+0.4.0 in `Cargo.toml`. This crate is `publish = false`. It is not on crates.io, and this repository has no release tag.

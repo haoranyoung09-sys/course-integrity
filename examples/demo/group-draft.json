@@ -1,7 +1,7 @@
 {
   "schema": "course-integrity.review.v1",
   "product": "course-integrity",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "disclaimer": "Descriptive review signals only. These figures are not an AI probability, not a calibrated risk score, not a confidence interval, and not an accuracy claim. They are insufficient evidence for authorship. A similarity match is not a plagiarism verdict.",
   "warnings": [],
   "files": [
@@ -60,7 +60,7 @@
       },
       "limitations": [
         "DOCX and text-based PDF are extracted to plain text. Legacy .doc, scanned pages, images, and charts are not read. OCR is not included.",
-        "No trained model is included, and none of the figures is a probability of AI use.",
+        "Writing statistics are not a trained-model score. The optional classifier, when it is run, reports an uncalibrated class-1 softmax. That number is not a probability that the text was written by AI.",
         "Chinese text is tokenized per character. There is no dictionary word segmenter.",
         "Near-exact matching uses 4-token shingles. Paraphrase, summary, and translation are not detected.",
         "Sentence boundaries are heuristic. A small set of abbreviations and decimal points is handled; other dots can split or join sentences.",
@@ -205,9 +205,29 @@
           "No hidden controls or unusual spaces were found. For a UTF-8 file, unusual newlines would be listed here too."
         ]
       },
+      "ai_classifier": {
+        "status": "not_run",
+        "reason": "Pass --ai-classify to run the optional local model. No score was produced.",
+        "label": "AI 模型分类分数（未校准） / AI classifier score (uncalibrated)",
+        "distinction": "This number is the softmax of class index 1, scaled from 0 to 100. Class index 0 is human and class index 1 is AI in the official AIGC v3 demo and training code. It is not the percentage of this text that was written by AI, and it is not a calibrated probability of authorship.",
+        "flagged_share_definition": "Classifier-flagged character share uses only characters inside chunks that were actually scored. A chunk is flagged when its AI-class softmax is greater than 0.5. The denominator is that scored-character count, not the length of the file. This share is not the portion of the file that is AI-written.",
+        "not_a_zero_result": "A missing model, a skipped chunk, or a failed run is not 0%. No score is emitted in those cases.",
+        "chunks": [],
+        "scored_characters": 0,
+        "flagged_characters": 0,
+        "skipped_characters": 0,
+        "uncovered_characters": 0,
+        "flagged_character_share": null,
+        "models": [],
+        "notes": [
+          "This number is the softmax of class index 1, scaled from 0 to 100. Class index 0 is human and class index 1 is AI in the official AIGC v3 demo and training code. It is not the percentage of this text that was written by AI, and it is not a calibrated probability of authorship.",
+          "A missing model, a skipped chunk, or a failed run is not 0%. No score is emitted in those cases.",
+          "Short, mixed-language, academic, and non-native English text can be classified the wrong way. No accuracy figure is claimed."
+        ]
+      },
       "corpus": {
         "queried": true,
-        "database_path": "/tmp/tmp.sR03paaT3V/demo.db",
+        "database_path": "/tmp/tmp.kes1rox2As/demo.db",
         "min_containment_basis_points": 8000,
         "min_shared_shingles": 4,
         "coverage": {

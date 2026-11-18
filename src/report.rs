@@ -1,5 +1,6 @@
 use serde::Serialize;
 
+use crate::ai_class::AiClassifierReport;
 use crate::artifacts::{audit_text, show_text, ArtifactReport};
 use crate::corpus::CorpusSection;
 use crate::method::{
@@ -55,6 +56,7 @@ pub struct FileReview {
     pub document: DocumentStats,
     pub paragraphs: Vec<ParagraphStats>,
     pub artifacts: ArtifactReport,
+    pub ai_classifier: AiClassifierReport,
     pub corpus: Option<CorpusSection>,
 }
 
@@ -76,6 +78,7 @@ pub(crate) struct ReviewInput<'a> {
     pub extraction_notes: &'a [String],
     pub paragraph_locations: &'a [String],
     pub analysis: Analysis,
+    pub ai_classifier: AiClassifierReport,
     pub corpus: Option<CorpusSection>,
 }
 
@@ -103,6 +106,7 @@ pub(crate) fn review_file(input: ReviewInput<'_>) -> FileReview {
         document: analysis.document,
         paragraphs: analysis.paragraphs,
         artifacts: audit_text(input.text, input.origin),
+        ai_classifier: input.ai_classifier,
         corpus: input.corpus,
     }
 }
@@ -188,6 +192,7 @@ fn render_file(out: &mut String, file: &FileReview) {
         if file.input.bom_stripped { "yes" } else { "no" }
     ));
     render_artifacts(out, file);
+    render_ai(out, file);
     if !file.extraction_notes.is_empty() {
         out.push_str("### What was read\n\n");
         for note in &file.extraction_notes {
@@ -484,6 +489,62 @@ fn render_artifacts(out: &mut String, file: &FileReview) {
         ));
     }
     out.push('\n');
+}
+
+fn render_ai(out: &mut String, file: &FileReview) {
+    let ai = &file.ai_classifier;
+    out.push_str("### Optional local classifier\n\n");
+    out.push_str(&format!("- Status: {}\n", ai.status));
+    if let Some(reason) = &ai.reason {
+        out.push_str(&format!("- Reason: {reason}\n"));
+    }
+    if ai.status != "ok" {
+        out.push_str(&format!("- {}\n", ai.not_a_zero_result));
+    }
+    out.push('\n');
+    if ai.chunks.is_empty() {
+        out.push_str("No classifier chunks were scored.\n\n");
+        return;
+    }
+    for chunk in &ai.chunks {
+        out.push_str(&format!(
+            "- {} language {} characters {}–{}",
+            chunk.location, chunk.language, chunk.char_start, chunk.char_end
+        ));
+        if chunk.language_forced {
+            out.push_str(" (language forced)");
+        }
+        out.push('\n');
+        if let Some(score) = chunk.score_0_to_100 {
+            out.push_str(&format!("  - {}: {score}\n", ai.label));
+            out.push_str(&format!("  - {}\n", ai.distinction));
+            out.push_str(&format!(
+                "  - Predicted class: {}\n",
+                chunk.predicted_class.as_deref().unwrap_or("unknown")
+            ));
+            if let Some(tokens) = chunk.token_count {
+                out.push_str(&format!(
+                    "  - Tokens including special tokens: {tokens} of 512\n"
+                ));
+            }
+        } else {
+            out.push_str(&format!(
+                "  - Not scored: {}\n",
+                chunk.reason.as_deref().unwrap_or("not_scored")
+            ));
+        }
+    }
+    out.push('\n');
+    if let Some(share) = ai.flagged_character_share {
+        out.push_str(&format!(
+            "Classifier-flagged character share: {share} ({}/{} scored characters).\n\n{}\n\n",
+            ai.flagged_characters, ai.scored_characters, ai.flagged_share_definition
+        ));
+    }
+    out.push_str(&format!(
+        "Coverage: {} scored characters, {} skipped characters, {} characters not covered by a tokenizer window.\n\n",
+        ai.scored_characters, ai.skipped_characters, ai.uncovered_characters
+    ));
 }
 
 fn fmt_opt(value: Option<f64>) -> String {

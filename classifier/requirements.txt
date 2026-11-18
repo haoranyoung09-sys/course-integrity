@@ -1,0 +1,10 @@
+# Explicit opt-in. Not used by cargo test or CI.
+# Install the CPU torch wheel first, from the PyTorch index, then this file:
+#   python -m pip install "torch==2.5.1+cpu" --index-url https://download.pytorch.org/whl/cpu
+#   python -m pip install -r classifier/requirements.txt
+# torch is not listed here. A PyPI torch pin would not match the +cpu wheel.
+transformers==4.46.3
+tokenizers==0.20.3
+safetensors==0.4.5
+huggingface_hub==0.26.5
+numpy==2.1.3

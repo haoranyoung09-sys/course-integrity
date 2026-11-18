@@ -19,6 +19,8 @@
 *.review.html
 
 # Secrets
+__pycache__/
+*.pyc
 .env
 .env.*
 *.pem
