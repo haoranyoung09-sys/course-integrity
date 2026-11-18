@@ -261,3 +261,51 @@ fn directory_warns_about_pdf_and_still_scans_text() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn pairwise_scan_compares_in_memory_and_rejects_db() {
+    let dir = std::env::temp_dir().join(format!(
+        "course-integrity-cli-pairwise-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("dir");
+    let shared = "In this synthetic cooling exercise the group recorded the temperature of two hundred millilitres of water in a glass beaker after heating it.";
+    fs::write(
+        dir.join("a.md"),
+        format!("Synthetic fixture.\n\n{shared}\n"),
+    )
+    .expect("a");
+    fs::write(
+        dir.join("b.md"),
+        format!("Synthetic fixture.\n\n{shared}\n"),
+    )
+    .expect("b");
+
+    let conflict = run(&[
+        "scan",
+        dir.to_str().expect("dir"),
+        "--pairwise",
+        "--db",
+        "unused.db",
+    ]);
+    assert_eq!(conflict.status.code(), Some(2));
+
+    let output = json_stdout(&run(&[
+        "scan",
+        dir.to_str().expect("dir"),
+        "--pairwise",
+        "--format",
+        "json",
+    ]));
+    let files = output["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0]["corpus"]["queried"], true);
+    assert!(!files[0]["corpus"]["document_exact_matches"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(!files[0]["corpus"]["matches"].as_array().unwrap().is_empty());
+
+    let _ = fs::remove_dir_all(&dir);
+}

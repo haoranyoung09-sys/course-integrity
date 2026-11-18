@@ -1,6 +1,6 @@
 # Method
 
-`course-integrity` 0.1.0 reports descriptive review signals for UTF-8 `.txt` and `.md` drafts. This page is the contract for those signals. Schema version of the local database is 1. A later change to tokenization or shingles will refuse an older database file instead of quietly rescoring it.
+`course-integrity` 0.3.0 reports descriptive review signals for UTF-8 `.txt` and `.md` drafts, `.docx` files, and text-based `.pdf` files, together with a hidden-character inventory and optional local corpus overlap. This page is the contract for those signals. Schema version of the local database is 1. A later change to tokenization or shingles will refuse an older database file instead of quietly rescoring it.
 
 The sentences below are the same strings the report prints.
 
@@ -24,7 +24,7 @@ Repeated phrases are trigrams of the non-numeric token stream that occur at leas
 
 Transition phrases are a fixed inventory counted for description. English phrases match consecutive word tokens, longest phrase first, and a numeric or Han token breaks the word run. Chinese phrases match the Han and kana character stream with separators removed, longest phrase first, without overlapping. Step words such as first, second, and then are not in the inventory, because lab procedures repeat them constantly. A high or low count is not a style verdict and is not evidence about authorship.
 
-Paragraphs are split on blank lines. Sentence boundaries are `. ! ? ; 。 ！ ？ ； …`, plus newlines inside a paragraph. Decimal points between digits are kept, and a small abbreviation list (`Dr.`, `Fig.`, `e.g.`, `i.e.`, `et al.`, and a few others) does not split. Other dots can still split or join a sentence. That is a limitation, not a hidden score.
+Paragraphs are split on blank lines. Sentence boundaries are `. ! ? ; 。 ！ ？ ； …`, plus newlines at headings, list items, blockquotes, or lines ending in a colon, while ordinary wrapped lines inside a paragraph are joined. Decimal points between digits are kept, and a small abbreviation list (`Dr.`, `Fig.`, `e.g.`, `i.e.`, `et al.`, and a few others) does not split. Other dots can still split or join a sentence. That is a limitation, not a hidden score.
 
 Evidence levels are labels about stability, not about authorship:
 

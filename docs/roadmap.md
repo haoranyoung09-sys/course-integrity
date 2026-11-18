@@ -1,14 +1,14 @@
 # Roadmap
 
-Version 0.2.0 reads UTF-8 `.txt` and `.md`, extracts text from `.docx` and text-based `.pdf`, and writes an offline HTML report as well as Markdown and JSON. The local database is still schema 1.
+Version 0.3.0 reads UTF-8 `.txt` and `.md`, extracts text from `.docx` and text-based `.pdf`, lists hidden characters and newlines, supports in-memory `--pairwise` folder checks, and writes an offline HTML report as well as Markdown and JSON. The local database is still schema 1.
 
 ## Possible later work
 
-- Optional local OCR for scans, behind an explicit flag and a documented external program. It is not in 0.2.0.
+- Optional local OCR for scans, behind an explicit flag and a documented external program. It is not in 0.3.0.
 - An optional Chinese word segmenter, off by default, so character shingles remain the documented behavior until someone chooses otherwise.
-- An index for larger local corpora. The score would stay containment over distinct query shingles.
+- A persistent disk index for very large local corpora. The score would stay containment over distinct query shingles.
 
-## In 0.2.0, and still not a verdict
+## In 0.3.0, and still not a verdict
 
 - DOCX and PDF input is text extraction. It does not describe figures or charts.
 - Set-aside rows for quotations, bibliographies, and `--boilerplate` files are still shingle matches. They are not a semantic comparison.

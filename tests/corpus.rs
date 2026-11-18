@@ -278,3 +278,53 @@ fn empty_corpus_does_not_imply_originality() {
     drop(db);
     let _ = fs::remove_file(&path);
 }
+
+#[test]
+fn boilerplate_does_not_flood_context_overlaps_and_batch_add_works() {
+    let path = db_path("batch");
+    let mut db = Database::open(&path).expect("open");
+    let handout = "In this synthetic cooling exercise every student starts from the shared laboratory handout paragraph before writing their own bench observations.";
+    let quote = "As the textbook states in detail, a glass beaker placed on an open laboratory bench cools quickly at first and more slowly later.";
+    let mut docs: Vec<(String, String)> = Vec::new();
+    for index in 0..25 {
+        docs.push((
+            format!("student-{index}.md"),
+            format!("Synthetic fixture.\n\n{handout}\n\nStudent {index} recorded temperature reading {index} every thirty seconds without stirring the water.\n"),
+        ));
+    }
+    docs.push((
+        "source-quote.md".to_string(),
+        format!("Synthetic fixture.\n\n{quote}\n"),
+    ));
+    docs.push((
+        "duplicate-copy.md".to_string(),
+        format!("Synthetic fixture.\n\n{quote}\n"),
+    ));
+    let refs: Vec<(&str, &str)> = docs
+        .iter()
+        .map(|(label, text)| (label.as_str(), text.as_str()))
+        .collect();
+    let outcomes = db.add_texts(&refs).expect("batch add");
+    assert_eq!(outcomes.len(), 27);
+    assert_eq!(outcomes.last().unwrap().status, "duplicate");
+
+    let query = format!("Synthetic fixture.\n\n{handout}\n\n\"{quote}\"\n");
+    let mut opts = options(false);
+    opts.boilerplate =
+        boilerplate_passages("handout.md", &format!("Synthetic fixture.\n\n{handout}\n"));
+    let result = db.check_text("draft.md", &query, &opts).expect("check");
+    assert!(result.matches.is_empty());
+    let boilerplate_hits = result
+        .context_overlaps
+        .iter()
+        .filter(|hit| hit.source_kind == "boilerplate")
+        .count();
+    assert_eq!(boilerplate_hits, 1);
+    assert!(result
+        .context_overlaps
+        .iter()
+        .any(|hit| hit.set_aside.unwrap_or("").contains("quotation")));
+
+    drop(db);
+    let _ = fs::remove_file(&path);
+}

@@ -99,6 +99,12 @@ cargo run --locked -- scan fixtures/synthetic/group_draft.md \
   --db .course-integrity/demo.db
 ```
 
+只把文件夹里的多份草稿在内存中两两互查、不写任何数据库文件：
+
+```bash
+cargo run --locked -- scan fixtures/synthetic --pairwise --format html --out-dir /tmp/ci-pairwise
+```
+
 达到可比较长度的 UTF-8 文件，原文会保存在这个 SQLite 文件里。DOCX 和 PDF 保存的是抽出的纯文本，不是原始字节。请不要提交这个数据库，也不要把它指向你无权保存的作业。短到无法比较的文件不会写入。`corpus list` 不打印正文，但正文仍在数据库里。
 
 重合分数是 containment：分子是查询段落和来源段落共有的、不重复的 4 词元片段数，**分母是查询段落自己的不重复 4 词元片段数**。默认阈值是 0.8，并且至少要有 4 个共有片段。这不是抄袭判决。小组共用的题目说明、引用、模板和实验套话都可能命中。

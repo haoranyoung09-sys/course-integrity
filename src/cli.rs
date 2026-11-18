@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
 use crate::corpus::{
-    boilerplate_passages, threshold_basis_points, AddOutcome, CheckOptions, Database,
+    boilerplate_passages, threshold_basis_points, AddOutcome, CheckOptions, CorpusIndex, Database,
 };
 use crate::error::Error;
 use crate::files::load_inputs;
@@ -15,6 +15,7 @@ use crate::method::{
     CORPUS_SCHEMA, DEFAULT_MIN_CONTAINMENT, DISCLAIMER, PERSISTED_TEXT_NOTE, PRODUCT,
 };
 use crate::report::{bundle, render_json, render_markdown, review_file, Bundle, ReviewInput};
+use crate::stats::analyze;
 
 #[derive(Parser)]
 #[command(
@@ -77,6 +78,9 @@ struct ScanArgs {
     /// Handout or template. Matches against these files are set aside, and the files are not stored.
     #[arg(long = "boilerplate", value_name = "PATH")]
     boilerplate: Vec<PathBuf>,
+    /// Compare scanned files against each other in memory without writing a database.
+    #[arg(long)]
+    pairwise: bool,
 }
 
 #[derive(Parser)]
@@ -172,6 +176,11 @@ fn dispatch(cli: Cli) -> Result<(), Error> {
 }
 
 fn scan(args: ScanArgs) -> Result<(), Error> {
+    if args.pairwise && args.db.is_some() {
+        return Err(Error::Output(
+            "--pairwise cannot be combined with --db. Use --db to query a stored corpus, or --pairwise to compare scanned files in memory without storing them.".to_string(),
+        ));
+    }
     let threshold = threshold_basis_points(args.min_containment)?;
     let loaded = load_inputs(&args.path, args.label.as_deref())?;
     let mut boilerplate = Vec::new();
@@ -184,25 +193,34 @@ fn scan(args: ScanArgs) -> Result<(), Error> {
             eprintln!("warning: {warning}");
         }
     }
-    let mut database = match &args.db {
-        Some(path) => Some(Database::open(path)?),
-        None => None,
+    let analyses: Vec<_> = loaded
+        .files
+        .iter()
+        .map(|file| analyze(&file.text))
+        .collect();
+    let corpus_index = if let Some(path) = &args.db {
+        Some(Database::open(path)?.load_index()?)
+    } else if args.pairwise {
+        let items: Vec<(&str, &crate::stats::Analysis)> = loaded
+            .files
+            .iter()
+            .zip(analyses.iter())
+            .map(|(file, analysis)| (file.label.as_str(), analysis))
+            .collect();
+        Some(CorpusIndex::from_in_memory(&items))
+    } else {
+        None
     };
-    let mut files = Vec::new();
-    for file in &loaded.files {
-        let corpus = if let Some(db) = database.as_mut() {
-            Some(db.check_text(
-                &file.label,
-                &file.text,
-                &CheckOptions {
-                    min_containment_basis_points: threshold,
-                    include_self: args.include_self,
-                    boilerplate: boilerplate.clone(),
-                },
-            )?)
-        } else {
-            None
-        };
+    let options = CheckOptions {
+        min_containment_basis_points: threshold,
+        include_self: args.include_self,
+        boilerplate,
+    };
+    let mut files = Vec::with_capacity(loaded.files.len());
+    for (file, analysis) in loaded.files.iter().zip(analyses) {
+        let corpus = corpus_index
+            .as_ref()
+            .map(|index| index.check(&file.label, &file.text, &analysis, &options, &[]));
         files.push(review_file(ReviewInput {
             label: &file.label,
             text: &file.text,
@@ -210,6 +228,7 @@ fn scan(args: ScanArgs) -> Result<(), Error> {
             origin: &file.origin,
             extraction_notes: &file.diagnostics,
             paragraph_locations: &file.locations,
+            analysis,
             corpus,
         }));
     }
@@ -228,29 +247,45 @@ fn emit_report(
             "--format all writes Markdown, HTML, and JSON files. Pass --out-dir DIR. A single format can still be printed to the terminal, for example --format html.".to_string(),
         ));
     }
-    let json = render_json(report)?;
-    let markdown = render_markdown(report);
-    let html = render_html(report);
+    let markdown = matches!(format, ReportFormat::Markdown | ReportFormat::All)
+        .then(|| render_markdown(report));
+    let html =
+        matches!(format, ReportFormat::Html | ReportFormat::All).then(|| render_html(report));
+    let json = matches!(format, ReportFormat::Json | ReportFormat::All)
+        .then(|| render_json(report))
+        .transpose()?;
     if let Some(dir) = out_dir {
         fs::create_dir_all(dir).map_err(|source| Error::Io {
             path: Some(dir.to_path_buf()),
             source,
         })?;
         let stem = output_stem(input);
-        if matches!(format, ReportFormat::Markdown | ReportFormat::All) {
-            write_report(dir, &stem, "md", &markdown)?;
+        if let Some(contents) = &markdown {
+            write_report(dir, &stem, "md", contents)?;
         }
-        if matches!(format, ReportFormat::Html | ReportFormat::All) {
-            write_report(dir, &stem, "html", &html)?;
+        if let Some(contents) = &html {
+            write_report(dir, &stem, "html", contents)?;
         }
-        if matches!(format, ReportFormat::Json | ReportFormat::All) {
-            write_report(dir, &stem, "json", &json)?;
+        if let Some(contents) = &json {
+            write_report(dir, &stem, "json", contents)?;
         }
     }
     match format {
-        ReportFormat::Markdown => print!("{markdown}"),
-        ReportFormat::Json => print!("{json}"),
-        ReportFormat::Html => print!("{html}"),
+        ReportFormat::Markdown => {
+            if let Some(contents) = &markdown {
+                print!("{contents}");
+            }
+        }
+        ReportFormat::Json => {
+            if let Some(contents) = &json {
+                print!("{contents}");
+            }
+        }
+        ReportFormat::Html => {
+            if let Some(contents) = &html {
+                print!("{contents}");
+            }
+        }
         ReportFormat::All => {}
     }
     Ok(())
@@ -269,10 +304,12 @@ fn add(args: AddArgs) -> Result<(), Error> {
         eprintln!("warning: {warning}");
     }
     let mut database = Database::open(&args.db)?;
-    let mut results = Vec::new();
-    for file in loaded.files {
-        results.push(database.add_text(&file.label, &file.text)?);
-    }
+    let items: Vec<(&str, &str)> = loaded
+        .files
+        .iter()
+        .map(|file| (file.label.as_str(), file.text.as_str()))
+        .collect();
+    let results = database.add_texts(&items)?;
     let report = CorpusCommandReport {
         schema: CORPUS_SCHEMA,
         product: PRODUCT,

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -13,8 +13,8 @@ use crate::method::{
     SET_ASIDE_QUOTE, SET_ASIDE_TEMPLATE,
 };
 use crate::regions::{paragraph_roles, PassageRole};
-use crate::stats::{analyze, preview};
-use crate::tokenize::{canonical_label, score_shingles};
+use crate::stats::{analyze, preview, Analysis};
+use crate::tokenize::{canonical_label, score_counts, score_shingles};
 
 const SCHEMA_SQL: &str = "
 PRAGMA foreign_keys = ON;
@@ -221,93 +221,61 @@ impl Database {
             .iter()
             .any(|passage| passage.exact_eligible)
         {
-            return Ok(AddOutcome {
-                source_label: label,
-                status: "skipped".to_string(),
-                document_id: None,
-                existing_label: None,
-                characters,
-                stored_passages: 0,
-                detail: format!(
-                    "No passage reached {MIN_NORMALIZED_CHARS} normalized characters, so the file was not stored."
-                ),
-            });
+            return Ok(skipped_outcome(label, characters));
+        }
+        if let Some((id, existing_label)) =
+            find_duplicate(&self.conn, &self.path, &analysis.content_hash)?
+        {
+            return Ok(duplicate_outcome(label, id, existing_label, characters));
         }
 
         let tx = self
             .conn
             .transaction()
             .map_err(|err| db_err(&self.path, err))?;
-        let existing: Option<(i64, String)> = tx
-            .query_row(
-                "SELECT id, source_label FROM documents WHERE content_hash = ?1",
-                [&analysis.content_hash],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(|err| db_err(&self.path, err))?;
-        if let Some((id, existing_label)) = existing {
-            return Ok(AddOutcome {
-                source_label: label,
-                status: "duplicate".to_string(),
-                document_id: Some(id),
-                existing_label: Some(existing_label.clone()),
-                characters,
-                stored_passages: 0,
-                detail: format!(
-                    "An identical normalized document is already stored as id {id} ({existing_label}). A second copy was not inserted. Checking a different label with this content still reports a match against the stored copy."
-                ),
-            });
-        }
+        let outcome = insert_document(&tx, &self.path, label, text, characters, &analysis)?;
+        tx.commit().map_err(|err| db_err(&self.path, err))?;
+        Ok(outcome)
+    }
 
-        let passage_count = analysis.passages.len() as i64;
-        tx.execute(
-            "INSERT INTO documents (source_label, content_hash, char_count, passage_count, added_at, text)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                label,
-                analysis.content_hash,
-                i64_from_usize(characters)?,
-                passage_count,
-                now_rfc3339(),
-                text
-            ],
-        )
-        .map_err(|err| db_err(&self.path, err))?;
-        let id = tx.last_insert_rowid();
-        for passage in &analysis.passages {
-            let shingles = serde_json::to_string(&passage.shingles.iter().collect::<Vec<_>>())
-                .map_err(|err| db_err(&self.path, err))?;
-            tx.execute(
-                "INSERT INTO passages (
-                    document_id, paragraph_index, text, normalized, norm_hash, shingles_json, token_count, comparable
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![
-                    id,
-                    i64_from_usize(passage.index)?,
-                    passage.text,
-                    passage.normalized,
-                    passage.norm_hash,
-                    shingles,
-                    i64_from_usize(passage.tokens.len())?,
-                    i64::from(u8::from(passage.comparable))
-                ],
-            )
+    pub fn add_texts(&mut self, items: &[(&str, &str)]) -> Result<Vec<AddOutcome>, Error> {
+        let prepared: Vec<(String, &str, usize, Analysis)> = items
+            .iter()
+            .map(|(label, text)| {
+                (
+                    canonical_label(label),
+                    *text,
+                    text.chars().count(),
+                    analyze(text),
+                )
+            })
+            .collect();
+        let tx = self
+            .conn
+            .transaction()
             .map_err(|err| db_err(&self.path, err))?;
+        let mut outcomes = Vec::with_capacity(prepared.len());
+        for (label, text, characters, analysis) in prepared {
+            if !analysis
+                .passages
+                .iter()
+                .any(|passage| passage.exact_eligible)
+            {
+                outcomes.push(skipped_outcome(label, characters));
+                continue;
+            }
+            if let Some((id, existing_label)) =
+                find_duplicate(&tx, &self.path, &analysis.content_hash)?
+            {
+                outcomes.push(duplicate_outcome(label, id, existing_label, characters));
+                continue;
+            }
+            outcomes.push(insert_document(
+                &tx, &self.path, label, text, characters, &analysis,
+            )?);
         }
         tx.commit().map_err(|err| db_err(&self.path, err))?;
-        Ok(AddOutcome {
-            source_label: label,
-            status: "inserted".to_string(),
-            document_id: Some(id),
-            existing_label: None,
-            characters,
-            stored_passages: analysis.passages.len(),
-            detail: format!(
-                "Stored the full original text locally, with {} passage(s).",
-                analysis.passages.len()
-            ),
-        })
+        Ok(outcomes)
     }
 
     pub fn list_documents(&self) -> Result<Vec<DocInfo>, Error> {
@@ -384,196 +352,22 @@ impl Database {
         text: &str,
         options: &CheckOptions,
     ) -> Result<CorpusSection, Error> {
-        let label = canonical_label(label);
         let analysis = analyze(text);
+        let index = self.load_index()?;
+        Ok(index.check(label, text, &analysis, options, &[]))
+    }
+
+    pub(crate) fn load_index(&self) -> Result<CorpusIndex, Error> {
         let coverage = self.coverage()?;
         let documents = self.load_documents()?;
-        let stored = self.load_passages()?;
-        let mut excluded_self = Vec::new();
-        let mut excluded_ids = BTreeSet::new();
-        if !options.include_self {
-            for document in &documents {
-                if document.label == label {
-                    excluded_ids.insert(document.id);
-                    excluded_self.push(ExcludedSelf {
-                        document_id: document.id,
-                        source_label: document.label.clone(),
-                        reason: format!(
-                            "Stored document {} uses the same source label ({}). It was excluded so this file is not reported as overlapping its own stored copy. Pass --include-self to compare them.",
-                            document.id, document.label
-                        ),
-                    });
-                }
-            }
-        }
-
-        let document_exact_matches = documents
-            .iter()
-            .filter(|document| {
-                document.hash == analysis.content_hash && !excluded_ids.contains(&document.id)
-            })
-            .map(|document| DocumentExact {
-                source_document_id: document.id,
-                source_label: document.label.clone(),
-                note: DOCUMENT_EXACT_NOTE,
-            })
-            .collect::<Vec<_>>();
-
-        let mut notes = vec![PERSISTED_TEXT_NOTE.to_string(), SCOPE_LINE.to_string()];
-        if options.include_self {
-            notes.push(
-                "Self-matches are included because --include-self was set. A hit against the same source label is the stored copy, not an independent source.".to_string(),
-            );
-        }
-        if coverage.document_count == 0 {
-            notes.push(
-                "The local corpus has no stored documents. No overlap can be found. That is not evidence that the draft is original.".to_string(),
-            );
-        }
-        let query_comparable = analysis
-            .passages
-            .iter()
-            .any(|passage| passage.exact_eligible);
-        if !query_comparable {
-            notes.push(format!(
-                "The query has no passage of at least {MIN_NORMALIZED_CHARS} normalized characters, so there is nothing to compare. No match is not evidence of originality."
-            ));
-        }
-
-        let roles = paragraph_roles(text);
-        let mut meeting = Vec::new();
-        let mut context = Vec::new();
-        let mut strongest: Option<MatchHit> = None;
-        if query_comparable {
-            for query in &analysis.passages {
-                if !query.exact_eligible {
-                    continue;
-                }
-                let structural = roles
-                    .get(query.index.saturating_sub(1))
-                    .copied()
-                    .unwrap_or(PassageRole::Prose);
-                let template = best_boilerplate(
-                    query,
-                    &options.boilerplate,
-                    options.min_containment_basis_points,
-                );
-                let set_aside = if template.is_some() {
-                    Some(SET_ASIDE_TEMPLATE)
-                } else {
-                    match structural {
-                        PassageRole::Prose => None,
-                        PassageRole::Quotation => Some(SET_ASIDE_QUOTE),
-                        PassageRole::Bibliography => Some(SET_ASIDE_BIB),
-                    }
-                };
-                if let Some(plate) = template {
-                    context.push(boilerplate_hit(query, plate));
-                }
-                for source in &stored {
-                    if excluded_ids.contains(&source.document_id) {
-                        continue;
-                    }
-                    let exact = source.normalized == query.normalized
-                        && source.normalized.chars().count() >= MIN_NORMALIZED_CHARS;
-                    let scored = score_shingles(&query.shingles, &source.shingles);
-                    let containment_points = scored.containment_basis_points.unwrap_or(0);
-                    let near = query.comparable
-                        && source.comparable
-                        && scored.shared >= MIN_SHARED_SHINGLES
-                        && containment_points >= options.min_containment_basis_points;
-                    let meets = exact || near;
-                    if !meets && scored.shared == 0 {
-                        continue;
-                    }
-                    let hit = MatchHit {
-                        query_paragraph_index: query.index,
-                        source_document_id: source.document_id,
-                        source_label: source.label.clone(),
-                        source_paragraph_index: source.paragraph_index,
-                        exact,
-                        shared_shingles: scored.shared,
-                        query_shingles: scored.query_shingles,
-                        source_shingles: scored.source_shingles,
-                        containment_basis_points: scored.containment_basis_points,
-                        jaccard_basis_points: scored.jaccard_basis_points,
-                        containment: scored.containment,
-                        jaccard: scored.jaccard,
-                        meets_threshold: meets,
-                        source_kind: "corpus".to_string(),
-                        set_aside,
-                        score_note: CONTAINMENT_DENOMINATOR,
-                        interpretation: if let Some(reason) = set_aside {
-                            reason
-                        } else if meets {
-                            NOT_PLAGIARISM_LINE
-                        } else {
-                            BELOW_THRESHOLD_NOTE
-                        },
-                        query_excerpt: preview(&query.text, 400),
-                        source_excerpt: preview(&source.text, 400),
-                    };
-                    if meets && set_aside.is_none() {
-                        meeting.push(hit);
-                    } else if meets {
-                        context.push(hit);
-                    } else if set_aside.is_none()
-                        && strongest.as_ref().is_none_or(|current| {
-                            hit.containment_basis_points.unwrap_or(0)
-                                > current.containment_basis_points.unwrap_or(0)
-                        })
-                    {
-                        strongest = Some(hit);
-                    }
-                }
-            }
-        }
-
-        sort_hits(&mut meeting);
-        sort_hits(&mut context);
-        let truncated_match_count = meeting.len().saturating_sub(MAX_REPORTED_MATCHES);
-        let truncated_context_count = context.len().saturating_sub(MAX_REPORTED_MATCHES);
-        meeting.truncate(MAX_REPORTED_MATCHES);
-        context.truncate(MAX_REPORTED_MATCHES);
-        if coverage.document_count > 0
-            && meeting.is_empty()
-            && context.is_empty()
-            && query_comparable
-        {
-            notes.push(
-                "No passage met the exact or near-exact threshold against the stored passages that were compared.".to_string(),
-            );
-        }
-        if !context.is_empty() {
-            notes.push(
-                "Some overlap was set aside because the passage is a quotation, a bibliography section, or boilerplate supplied with --boilerplate. Those rows are not treated as evidence of copied prose. The comparison is still shingle overlap, not a semantic reading.".to_string(),
-            );
-        }
-        if !excluded_self.is_empty() && meeting.is_empty() {
-            notes.push(
-                "Stored rows with this source label were excluded. This file was not compared with its own stored copy.".to_string(),
-            );
-        }
-
-        Ok(CorpusSection {
-            queried: true,
-            database_path: self.path_display(),
-            min_containment_basis_points: options.min_containment_basis_points,
-            min_shared_shingles: MIN_SHARED_SHINGLES,
+        let passages = self.load_passages()?;
+        Ok(CorpusIndex::build(
+            self.path_display(),
+            true,
             coverage,
-            excluded_self,
-            document_exact_matches,
-            matches: meeting,
-            context_overlaps: context,
-            strongest_below_threshold: strongest,
-            truncated_match_count,
-            truncated_context_count,
-            notes,
-            persisted_text_note: PERSISTED_TEXT_NOTE,
-            self_comparison: SELF_DESC,
-            excerpt_note: EXCERPT_NOTE,
-            hash_note: HASH_DESC,
-        })
+            documents,
+            passages,
+        ))
     }
 
     pub fn schema_version(&self) -> Result<String, Error> {
@@ -636,11 +430,11 @@ impl Database {
         Ok(documents)
     }
 
-    fn load_passages(&self) -> Result<Vec<StoredPassage>, Error> {
+    fn load_passages(&self) -> Result<Vec<(StoredPassage, Vec<String>)>, Error> {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT p.document_id, d.source_label, p.paragraph_index, p.text, p.normalized, p.shingles_json, p.comparable
+                "SELECT p.document_id, d.source_label, p.paragraph_index, p.text, p.normalized, p.norm_hash, p.shingles_json, p.comparable
                  FROM passages p
                  JOIN documents d ON d.id = p.document_id
                  ORDER BY p.document_id, p.paragraph_index",
@@ -655,31 +449,483 @@ impl Database {
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
                     row.get::<_, String>(5)?,
-                    row.get::<_, i64>(6)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
                 ))
             })
             .map_err(|err| db_err(&self.path, err))?;
         let mut passages = Vec::new();
         for row in rows {
-            let (document_id, label, paragraph_index, text, normalized, shingles_json, comparable) =
-                row.map_err(|err| db_err(&self.path, err))?;
+            let (
+                document_id,
+                label,
+                paragraph_index,
+                text,
+                normalized,
+                norm_hash,
+                shingles_json,
+                comparable,
+            ) = row.map_err(|err| db_err(&self.path, err))?;
             let list: Vec<String> =
                 serde_json::from_str(&shingles_json).map_err(|err| Error::Database {
                     path: self.path.clone(),
                     message: format!("could not read stored shingles: {err}"),
                 })?;
-            passages.push(StoredPassage {
-                document_id,
-                label,
-                paragraph_index: usize_from_i64(paragraph_index),
-                text,
-                normalized,
-                shingles: list.into_iter().collect(),
-                comparable: comparable != 0,
-            });
+            let unique_shingles: BTreeSet<String> = list.into_iter().collect();
+            let shingle_count = unique_shingles.len();
+            passages.push((
+                StoredPassage {
+                    document_id,
+                    label,
+                    paragraph_index: usize_from_i64(paragraph_index),
+                    text,
+                    normalized,
+                    norm_hash,
+                    shingle_count,
+                    comparable: comparable != 0,
+                },
+                unique_shingles.into_iter().collect(),
+            ));
         }
         Ok(passages)
     }
+}
+
+pub(crate) struct CorpusIndex {
+    location_label: String,
+    persisted: bool,
+    coverage: Coverage,
+    documents: Vec<StoredDocument>,
+    passages: Vec<StoredPassage>,
+    by_norm_hash: HashMap<String, Vec<usize>>,
+    by_shingle: HashMap<String, Vec<usize>>,
+}
+
+impl CorpusIndex {
+    fn build(
+        location_label: String,
+        persisted: bool,
+        coverage: Coverage,
+        documents: Vec<StoredDocument>,
+        items: Vec<(StoredPassage, Vec<String>)>,
+    ) -> Self {
+        let mut passages = Vec::with_capacity(items.len());
+        let mut by_norm_hash: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut by_shingle: HashMap<String, Vec<usize>> = HashMap::new();
+        for (idx, (passage, shingles)) in items.into_iter().enumerate() {
+            by_norm_hash
+                .entry(passage.norm_hash.clone())
+                .or_default()
+                .push(idx);
+            for shingle in shingles {
+                by_shingle.entry(shingle).or_default().push(idx);
+            }
+            passages.push(passage);
+        }
+        Self {
+            location_label,
+            persisted,
+            coverage,
+            documents,
+            passages,
+            by_norm_hash,
+            by_shingle,
+        }
+    }
+
+    pub(crate) fn from_in_memory(items: &[(&str, &Analysis)]) -> Self {
+        let mut documents = Vec::with_capacity(items.len());
+        let mut passage_items = Vec::new();
+        let mut total_characters = 0usize;
+        let mut comparable_passage_count = 0usize;
+        for (doc_offset, (label, analysis)) in items.iter().enumerate() {
+            let document_id = (doc_offset + 1) as i64;
+            let label = canonical_label(label);
+            total_characters += analysis.characters;
+            documents.push(StoredDocument {
+                id: document_id,
+                label: label.clone(),
+                hash: analysis.content_hash.clone(),
+            });
+            for passage in &analysis.passages {
+                if passage.comparable {
+                    comparable_passage_count += 1;
+                }
+                let shingles: Vec<String> = passage.shingles.iter().cloned().collect();
+                passage_items.push((
+                    StoredPassage {
+                        document_id,
+                        label: label.clone(),
+                        paragraph_index: passage.index,
+                        text: passage.text.clone(),
+                        normalized: passage.normalized.clone(),
+                        norm_hash: passage.norm_hash.clone(),
+                        shingle_count: shingles.len(),
+                        comparable: passage.comparable,
+                    },
+                    shingles,
+                ));
+            }
+        }
+        let coverage = Coverage {
+            document_count: documents.len(),
+            passage_count: passage_items.len(),
+            comparable_passage_count,
+            total_characters,
+            scope: SCOPE_LINE,
+        };
+        Self::build(
+            "in-memory pairwise (not stored)".to_string(),
+            false,
+            coverage,
+            documents,
+            passage_items,
+        )
+    }
+
+    pub(crate) fn check(
+        &self,
+        label: &str,
+        text: &str,
+        analysis: &Analysis,
+        options: &CheckOptions,
+        extra_notes: &[String],
+    ) -> CorpusSection {
+        let label = canonical_label(label);
+        let mut excluded_self = Vec::new();
+        let mut excluded_ids = BTreeSet::new();
+        if !options.include_self {
+            for document in &self.documents {
+                if document.label == label {
+                    excluded_ids.insert(document.id);
+                    excluded_self.push(ExcludedSelf {
+                        document_id: document.id,
+                        source_label: document.label.clone(),
+                        reason: format!(
+                            "Stored document {} uses the same source label ({}). It was excluded so this file is not reported as overlapping its own stored copy. Pass --include-self to compare them.",
+                            document.id, document.label
+                        ),
+                    });
+                }
+            }
+        }
+
+        let document_exact_matches = self
+            .documents
+            .iter()
+            .filter(|document| {
+                document.hash == analysis.content_hash && !excluded_ids.contains(&document.id)
+            })
+            .map(|document| DocumentExact {
+                source_document_id: document.id,
+                source_label: document.label.clone(),
+                note: DOCUMENT_EXACT_NOTE,
+            })
+            .collect::<Vec<_>>();
+
+        let persisted_note = if self.persisted {
+            PERSISTED_TEXT_NOTE
+        } else {
+            "Pairwise comparison ran in memory only. No files were written to a SQLite database."
+        };
+        let mut notes = vec![persisted_note.to_string(), SCOPE_LINE.to_string()];
+        notes.extend(extra_notes.iter().cloned());
+        if !self.persisted && self.documents.len() <= 1 && !options.include_self {
+            notes.push(
+                "Only one file was scanned, so there are no other files in this batch to compare against.".to_string(),
+            );
+        }
+        if options.include_self {
+            notes.push(
+                "Self-matches are included because --include-self was set. A hit against the same source label is the stored copy, not an independent source.".to_string(),
+            );
+        }
+        if self.coverage.document_count == 0 {
+            notes.push(
+                "The local corpus has no stored documents. No overlap can be found. That is not evidence that the draft is original.".to_string(),
+            );
+        }
+        let query_comparable = analysis
+            .passages
+            .iter()
+            .any(|passage| passage.exact_eligible);
+        if !query_comparable {
+            notes.push(format!(
+                "The query has no passage of at least {MIN_NORMALIZED_CHARS} normalized characters, so there is nothing to compare. No match is not evidence of originality."
+            ));
+        }
+
+        let roles = paragraph_roles(text);
+        let mut meeting = Vec::new();
+        let mut context = Vec::new();
+        let mut strongest: Option<MatchHit> = None;
+        if query_comparable {
+            for query in &analysis.passages {
+                if !query.exact_eligible {
+                    continue;
+                }
+                let structural = roles
+                    .get(query.index.saturating_sub(1))
+                    .copied()
+                    .unwrap_or(PassageRole::Prose);
+                let template = best_boilerplate(
+                    query,
+                    &options.boilerplate,
+                    options.min_containment_basis_points,
+                );
+                if let Some(plate) = template {
+                    context.push(boilerplate_hit(query, plate));
+                    continue;
+                }
+                let set_aside = match structural {
+                    PassageRole::Prose => None,
+                    PassageRole::Quotation => Some(SET_ASIDE_QUOTE),
+                    PassageRole::Bibliography => Some(SET_ASIDE_BIB),
+                };
+
+                let mut candidate_shared: HashMap<usize, usize> = HashMap::new();
+                for shingle in &query.shingles {
+                    if let Some(indices) = self.by_shingle.get(shingle) {
+                        for &idx in indices {
+                            *candidate_shared.entry(idx).or_insert(0) += 1;
+                        }
+                    }
+                }
+                if let Some(exact_indices) = self.by_norm_hash.get(&query.norm_hash) {
+                    for &idx in exact_indices {
+                        candidate_shared.entry(idx).or_insert(0);
+                    }
+                }
+
+                for (idx, shared) in candidate_shared {
+                    let source = &self.passages[idx];
+                    if excluded_ids.contains(&source.document_id) {
+                        continue;
+                    }
+                    let exact = source.norm_hash == query.norm_hash
+                        && source.normalized == query.normalized
+                        && source.normalized.chars().count() >= MIN_NORMALIZED_CHARS;
+                    let scored = score_counts(shared, query.shingles.len(), source.shingle_count);
+                    let containment_points = scored.containment_basis_points.unwrap_or(0);
+                    let near = query.comparable
+                        && source.comparable
+                        && scored.shared >= MIN_SHARED_SHINGLES
+                        && containment_points >= options.min_containment_basis_points;
+                    let meets = exact || near;
+                    if !meets && scored.shared == 0 {
+                        continue;
+                    }
+                    let hit = MatchHit {
+                        query_paragraph_index: query.index,
+                        source_document_id: source.document_id,
+                        source_label: source.label.clone(),
+                        source_paragraph_index: source.paragraph_index,
+                        exact,
+                        shared_shingles: scored.shared,
+                        query_shingles: scored.query_shingles,
+                        source_shingles: scored.source_shingles,
+                        containment_basis_points: scored.containment_basis_points,
+                        jaccard_basis_points: scored.jaccard_basis_points,
+                        containment: scored.containment,
+                        jaccard: scored.jaccard,
+                        meets_threshold: meets,
+                        source_kind: "corpus".to_string(),
+                        set_aside,
+                        score_note: CONTAINMENT_DENOMINATOR,
+                        interpretation: if let Some(reason) = set_aside {
+                            reason
+                        } else if meets {
+                            NOT_PLAGIARISM_LINE
+                        } else {
+                            BELOW_THRESHOLD_NOTE
+                        },
+                        query_excerpt: preview(&query.text, 400),
+                        source_excerpt: preview(&source.text, 400),
+                    };
+                    if meets && set_aside.is_none() {
+                        meeting.push(hit);
+                    } else if meets {
+                        context.push(hit);
+                    } else if set_aside.is_none()
+                        && strongest
+                            .as_ref()
+                            .is_none_or(|current| is_stronger_hit(&hit, current))
+                    {
+                        strongest = Some(hit);
+                    }
+                }
+            }
+        }
+
+        sort_hits(&mut meeting);
+        sort_hits(&mut context);
+        let truncated_match_count = meeting.len().saturating_sub(MAX_REPORTED_MATCHES);
+        let truncated_context_count = context.len().saturating_sub(MAX_REPORTED_MATCHES);
+        meeting.truncate(MAX_REPORTED_MATCHES);
+        context.truncate(MAX_REPORTED_MATCHES);
+        if self.coverage.document_count > 0
+            && meeting.is_empty()
+            && context.is_empty()
+            && query_comparable
+        {
+            notes.push(
+                "No passage met the exact or near-exact threshold against the stored passages that were compared.".to_string(),
+            );
+        }
+        if !context.is_empty() {
+            notes.push(
+                "Some overlap was set aside because the passage is a quotation, a bibliography section, or boilerplate supplied with --boilerplate. Those rows are not treated as evidence of copied prose. The comparison is still shingle overlap, not a semantic reading.".to_string(),
+            );
+        }
+        if !excluded_self.is_empty() && meeting.is_empty() {
+            notes.push(
+                "Stored rows with this source label were excluded. This file was not compared with its own stored copy.".to_string(),
+            );
+        }
+
+        CorpusSection {
+            queried: true,
+            database_path: self.location_label.clone(),
+            min_containment_basis_points: options.min_containment_basis_points,
+            min_shared_shingles: MIN_SHARED_SHINGLES,
+            coverage: self.coverage.clone(),
+            excluded_self,
+            document_exact_matches,
+            matches: meeting,
+            context_overlaps: context,
+            strongest_below_threshold: strongest,
+            truncated_match_count,
+            truncated_context_count,
+            notes,
+            persisted_text_note: persisted_note,
+            self_comparison: SELF_DESC,
+            excerpt_note: EXCERPT_NOTE,
+            hash_note: HASH_DESC,
+        }
+    }
+}
+
+fn is_stronger_hit(candidate: &MatchHit, current: &MatchHit) -> bool {
+    let cand_pts = candidate.containment_basis_points.unwrap_or(0);
+    let curr_pts = current.containment_basis_points.unwrap_or(0);
+    if cand_pts != curr_pts {
+        return cand_pts > curr_pts;
+    }
+    (
+        candidate.shared_shingles,
+        std::cmp::Reverse(candidate.query_paragraph_index),
+        std::cmp::Reverse(candidate.source_document_id),
+        std::cmp::Reverse(candidate.source_paragraph_index),
+    ) > (
+        current.shared_shingles,
+        std::cmp::Reverse(current.query_paragraph_index),
+        std::cmp::Reverse(current.source_document_id),
+        std::cmp::Reverse(current.source_paragraph_index),
+    )
+}
+
+fn find_duplicate(
+    conn: &Connection,
+    path: &Path,
+    content_hash: &str,
+) -> Result<Option<(i64, String)>, Error> {
+    conn.query_row(
+        "SELECT id, source_label FROM documents WHERE content_hash = ?1",
+        [content_hash],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+    .map_err(|err| db_err(path, err))
+}
+
+fn skipped_outcome(source_label: String, characters: usize) -> AddOutcome {
+    AddOutcome {
+        source_label,
+        status: "skipped".to_string(),
+        document_id: None,
+        existing_label: None,
+        characters,
+        stored_passages: 0,
+        detail: format!(
+            "No passage reached {MIN_NORMALIZED_CHARS} normalized characters, so the file was not stored."
+        ),
+    }
+}
+
+fn duplicate_outcome(
+    source_label: String,
+    id: i64,
+    existing_label: String,
+    characters: usize,
+) -> AddOutcome {
+    AddOutcome {
+        source_label,
+        status: "duplicate".to_string(),
+        document_id: Some(id),
+        existing_label: Some(existing_label.clone()),
+        characters,
+        stored_passages: 0,
+        detail: format!(
+            "An identical normalized document is already stored as id {id} ({existing_label}). A second copy was not inserted. Checking a different label with this content still reports a match against the stored copy."
+        ),
+    }
+}
+
+fn insert_document(
+    tx: &rusqlite::Transaction<'_>,
+    path: &Path,
+    label: String,
+    text: &str,
+    characters: usize,
+    analysis: &Analysis,
+) -> Result<AddOutcome, Error> {
+    let passage_count = analysis.passages.len() as i64;
+    tx.execute(
+        "INSERT INTO documents (source_label, content_hash, char_count, passage_count, added_at, text)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            label,
+            analysis.content_hash,
+            i64_from_usize(characters)?,
+            passage_count,
+            now_rfc3339(),
+            text
+        ],
+    )
+    .map_err(|err| db_err(path, err))?;
+    let id = tx.last_insert_rowid();
+    for passage in &analysis.passages {
+        let shingles = serde_json::to_string(&passage.shingles.iter().collect::<Vec<_>>())
+            .map_err(|err| db_err(path, err))?;
+        tx.execute(
+            "INSERT INTO passages (
+                document_id, paragraph_index, text, normalized, norm_hash, shingles_json, token_count, comparable
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                id,
+                i64_from_usize(passage.index)?,
+                passage.text,
+                passage.normalized,
+                passage.norm_hash,
+                shingles,
+                i64_from_usize(passage.tokens.len())?,
+                i64::from(u8::from(passage.comparable))
+            ],
+        )
+        .map_err(|err| db_err(path, err))?;
+    }
+    Ok(AddOutcome {
+        source_label: label,
+        status: "inserted".to_string(),
+        document_id: Some(id),
+        existing_label: None,
+        characters,
+        stored_passages: analysis.passages.len(),
+        detail: format!(
+            "Stored the full original text locally, with {} passage(s).",
+            analysis.passages.len()
+        ),
+    })
 }
 
 struct StoredDocument {
@@ -694,7 +940,8 @@ struct StoredPassage {
     paragraph_index: usize,
     text: String,
     normalized: String,
-    shingles: BTreeSet<String>,
+    norm_hash: String,
+    shingle_count: usize,
     comparable: bool,
 }
 

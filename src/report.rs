@@ -8,7 +8,7 @@ use crate::method::{
     NO_OVERALL_SCORE, OCR_DEFERRED, PRODUCT, REPETITION_NOTE, SCHEMA, SELF_DESC, SET_ASIDE_DESC,
     SHINGLE_DESC, TOKENIZER_DESC, TRANSITION_NOTE, UNICODE_DESC, VOCAB_NOTE,
 };
-use crate::stats::{analyze, DocumentStats, Evidence, ParagraphStats};
+use crate::stats::{Analysis, DocumentStats, Evidence, ParagraphStats};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InputInfo {
@@ -75,11 +75,12 @@ pub(crate) struct ReviewInput<'a> {
     pub origin: &'a str,
     pub extraction_notes: &'a [String],
     pub paragraph_locations: &'a [String],
+    pub analysis: Analysis,
     pub corpus: Option<CorpusSection>,
 }
 
 pub(crate) fn review_file(input: ReviewInput<'_>) -> FileReview {
-    let analysis = analyze(input.text);
+    let analysis = input.analysis;
     let mut notes = analysis.notes;
     if input.corpus.is_none() {
         notes.push(NOT_QUERIED_LINE.to_string());
@@ -212,7 +213,15 @@ fn render_file(out: &mut String, file: &FileReview) {
         out.push_str("No paragraphs were found.\n\n");
     }
     for paragraph in &file.paragraphs {
-        out.push_str(&format!("#### Paragraph {}\n\n", paragraph.index));
+        let location = file
+            .paragraph_locations
+            .get(paragraph.index - 1)
+            .map(String::as_str)
+            .unwrap_or("paragraph");
+        out.push_str(&format!(
+            "#### Paragraph {} ({location})\n\n",
+            paragraph.index
+        ));
         out.push_str(&format!("{}\n\n", paragraph.preview));
         out.push_str(&format!(
             "- Sentences: {}\n- Tokens: {} words, {} Han or kana, {} numeric\n- Mean sentence length: {}\n- Type-token ratio: {}\n- Transition hits: {}\n- Extra duplicate sentences: {}\n\n",

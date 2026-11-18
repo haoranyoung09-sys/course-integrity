@@ -120,6 +120,12 @@ cargo run --locked -- scan fixtures/synthetic/group_draft.md \
   --db .course-integrity/demo.db
 ```
 
+Compare drafts inside a folder against each other in memory without creating a database:
+
+```bash
+cargo run --locked -- scan fixtures/synthetic --pairwise --format html --out-dir /tmp/ci-pairwise
+```
+
 `corpus add` stores the full original text of each UTF-8 file that has a passage of at least 40 normalized characters, or the extracted plain text of a DOCX or PDF, plus a normalized copy and the shingles. Short files are skipped and are not written. The original DOCX or PDF bytes are not stored. See [docs/privacy.md](docs/privacy.md).
 
 `corpus list` does not print the text. The text is still in the database.

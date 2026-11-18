@@ -12,6 +12,8 @@ const MAX_ZIP_ENTRIES: usize = 128;
 const MAX_ENTRY_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_TOTAL_UNCOMPRESSED: u64 = 32 * 1024 * 1024;
 const MAX_XML_DEPTH: usize = 200;
+const MAX_PDF_PAGES: usize = 500;
+const MAX_PDF_TEXT_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug)]
 pub(crate) struct Extracted {
@@ -147,9 +149,21 @@ pub(crate) fn extract_pdf(path: &Path, bytes: &[u8]) -> Result<Extracted, Error>
             "could not extract text from this PDF ({err}). Passwords are not tried. OCR was not run, and the file was not uploaded."
         ),
     })?;
+    if pages.len() > MAX_PDF_PAGES {
+        return Err(Error::Extract {
+            path: path.to_path_buf(),
+            message: format!(
+                "PDF has {} pages, over the limit of {MAX_PDF_PAGES}. Nothing was extracted.",
+                pages.len()
+            ),
+        });
+    }
     let mut blocks = Vec::new();
     let mut locations = Vec::new();
     let mut empty_pages = 0usize;
+    let mut total_text_bytes = 0usize;
+    let mut edge_counts: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
     for (index, page) in pages.iter().enumerate() {
         let page_no = index + 1;
         let pieces = split_blocks(page);
@@ -157,7 +171,24 @@ pub(crate) fn extract_pdf(path: &Path, bytes: &[u8]) -> Result<Extracted, Error>
             empty_pages += 1;
             continue;
         }
+        let mut seen_edges = std::collections::BTreeSet::new();
+        for edge in [pieces.first(), pieces.last()].into_iter().flatten() {
+            let trimmed = edge.trim();
+            let char_len = trimmed.chars().count();
+            if (10..=120).contains(&char_len) && seen_edges.insert(trimmed.to_string()) {
+                *edge_counts.entry(trimmed.to_string()).or_insert(0) += 1;
+            }
+        }
         for (piece_index, piece) in pieces.into_iter().enumerate() {
+            total_text_bytes = total_text_bytes.saturating_add(piece.len());
+            if total_text_bytes > MAX_PDF_TEXT_BYTES {
+                return Err(Error::Extract {
+                    path: path.to_path_buf(),
+                    message: format!(
+                        "PDF extracted text exceeded {MAX_PDF_TEXT_BYTES} bytes. Nothing further was extracted."
+                    ),
+                });
+            }
             locations.push(format!("page {page_no} paragraph {}", piece_index + 1));
             blocks.push(piece);
         }
@@ -170,6 +201,14 @@ pub(crate) fn extract_pdf(path: &Path, bytes: &[u8]) -> Result<Extracted, Error>
         "Page locations are the PDF page numbers whose text layer produced characters. Layout, figures, and reading order can be wrong.".to_string(),
         OCR_DEFERRED.to_string(),
     ];
+    if pages.len() >= 3 {
+        let max_repeated = edge_counts.values().copied().max().unwrap_or(0);
+        if max_repeated >= 3 {
+            diagnostics.push(format!(
+                "Repeated page edge text appeared on {max_repeated} pages; running headers or footers in a PDF can affect sentence and duplicate counts."
+            ));
+        }
+    }
     if blocks.is_empty() {
         diagnostics.push(
             "No extractable text was found. This often means a scan or a figure-only file. OCR was not run.".to_string(),
@@ -237,10 +276,10 @@ fn push_xml_paragraphs(
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
     let mut depth = 0usize;
-    let mut in_text = false;
+    let mut skip_until_depth: Option<usize> = None;
+    let mut text_depth = 0usize;
     let mut paragraph_no = 0usize;
-    let mut current = String::new();
-    let mut in_paragraph = false;
+    let mut para_stack: Vec<(usize, String)> = Vec::new();
     loop {
         if reader.buffer_position() > MAX_ENTRY_BYTES {
             return Err(Error::Extract {
@@ -259,47 +298,74 @@ fn push_xml_paragraphs(
                         ),
                     });
                 }
+                if skip_until_depth.is_some() {
+                    buf.clear();
+                    continue;
+                }
                 let name = xml_name(&event);
-                if is_local(&name, "p") {
-                    in_paragraph = true;
+                if is_local(&name, "drawing")
+                    || is_local(&name, "pict")
+                    || is_local(&name, "Fallback")
+                    || is_local(&name, "delText")
+                {
+                    skip_until_depth = Some(depth);
+                } else if is_local(&name, "p") {
                     paragraph_no += 1;
-                    current.clear();
+                    para_stack.push((paragraph_no, String::new()));
                 } else if is_local(&name, "t") {
-                    in_text = true;
+                    text_depth += 1;
                 } else if is_local(&name, "tab") || is_local(&name, "br") || is_local(&name, "cr") {
-                    current.push(' ');
+                    if let Some((_, current)) = para_stack.last_mut() {
+                        current.push(' ');
+                    }
                 }
             }
             Ok(Event::Empty(event)) => {
+                if skip_until_depth.is_some() {
+                    buf.clear();
+                    continue;
+                }
                 let name = xml_name_empty(&event);
                 if is_local(&name, "tab") || is_local(&name, "br") || is_local(&name, "cr") {
-                    current.push(' ');
+                    if let Some((_, current)) = para_stack.last_mut() {
+                        current.push(' ');
+                    }
                 }
             }
             Ok(Event::Text(event)) => {
-                if in_text {
-                    let text = event.unescape().map_err(|err| Error::Extract {
-                        path: path.to_path_buf(),
-                        message: format!(
-                            "{location_file} has XML text that could not be decoded ({err}). Custom entities are not expanded."
-                        ),
-                    })?;
-                    current.push_str(&text);
+                if skip_until_depth.is_none() && text_depth > 0 {
+                    if let Some((_, current)) = para_stack.last_mut() {
+                        let text = event.unescape().map_err(|err| Error::Extract {
+                            path: path.to_path_buf(),
+                            message: format!(
+                                "{location_file} has XML text that could not be decoded ({err}). Custom entities are not expanded."
+                            ),
+                        })?;
+                        current.push_str(&text);
+                    }
                 }
             }
             Ok(Event::End(event)) => {
+                if let Some(target_depth) = skip_until_depth {
+                    if depth == target_depth {
+                        skip_until_depth = None;
+                    }
+                    depth = depth.saturating_sub(1);
+                    buf.clear();
+                    continue;
+                }
                 let name = xml_name_end(&event);
                 if is_local(&name, "t") {
-                    in_text = false;
+                    text_depth = text_depth.saturating_sub(1);
                 }
-                if is_local(&name, "p") && in_paragraph {
-                    let flat = flatten_block(&current);
-                    if !flat.is_empty() {
-                        locations.push(format!("{location_file} paragraph {paragraph_no}"));
-                        blocks.push(flat);
+                if is_local(&name, "p") {
+                    if let Some((p_no, raw)) = para_stack.pop() {
+                        let flat = flatten_block(&raw);
+                        if !flat.is_empty() {
+                            locations.push(format!("{location_file} paragraph {p_no}"));
+                            blocks.push(flat);
+                        }
                     }
-                    current.clear();
-                    in_paragraph = false;
                 }
                 depth = depth.saturating_sub(1);
             }
@@ -524,5 +590,30 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("PDF"), "{message}");
         assert!(message.contains("OCR was not run"), "{message}");
+    }
+
+    #[test]
+    fn docx_skips_drawings_fallbacks_and_deleted_revisions() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+  <w:body>
+    <w:p>
+      <w:r><w:t>Before drawing. </w:t></w:r>
+      <w:drawing><w:txbxContent><w:p><w:r><w:t>Box text</w:t></w:r></w:p></w:txbxContent></w:drawing>
+      <mc:AlternateContent>
+        <mc:Choice><w:r><w:t>Primary choice.</w:t></w:r></mc:Choice>
+        <mc:Fallback><w:r><w:t>Duplicate fallback.</w:t></w:r></mc:Fallback>
+      </mc:AlternateContent>
+      <w:del><w:r><w:delText>Removed words.</w:delText></w:r></w:del>
+    </w:p>
+  </w:body>
+</w:document>"#;
+        let bytes = docx_with(xml, &[]);
+        let extracted = extract_docx(Path::new("nested.docx"), &bytes).unwrap();
+        assert!(extracted.text.contains("Before drawing."));
+        assert!(extracted.text.contains("Primary choice."));
+        assert!(!extracted.text.contains("Box text"));
+        assert!(!extracted.text.contains("Duplicate fallback."));
+        assert!(!extracted.text.contains("Removed words."));
     }
 }

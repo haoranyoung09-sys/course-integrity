@@ -52,7 +52,8 @@ fn heading_kind(paragraph: &str) -> Option<HeadingKind> {
     if core.chars().count() > 80 {
         return None;
     }
-    let lower = core.to_lowercase();
+    let unnumbered = strip_section_number(core);
+    let lower = unnumbered.to_lowercase();
     const BIB: &[&str] = &[
         "references",
         "bibliography",
@@ -73,24 +74,55 @@ fn heading_kind(paragraph: &str) -> Option<HeadingKind> {
         return Some(HeadingKind::Other);
     }
     const SECTIONS: &[&str] = &[
+        "abstract",
         "introduction",
         "method",
         "methods",
         "results",
         "discussion",
         "conclusion",
+        "summary",
+        "limitations",
+        "future work",
+        "appendix",
+        "appendices",
+        "acknowledgments",
+        "acknowledgements",
         "data",
+        "摘要",
         "引言",
         "步骤",
         "数据",
+        "实验数据",
         "说明",
         "讨论",
         "结论",
+        "总结",
+        "局限性",
+        "致谢",
+        "附录",
     ];
     if SECTIONS.contains(&lower.as_str()) {
         return Some(HeadingKind::Other);
     }
     None
+}
+
+fn strip_section_number(text: &str) -> &str {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    let mut saw_digit = false;
+    while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+        if bytes[i].is_ascii_digit() {
+            saw_digit = true;
+        }
+        i += 1;
+    }
+    if saw_digit && i < bytes.len() && bytes[i] == b' ' {
+        text[i..].trim_start()
+    } else {
+        text
+    }
 }
 
 fn is_quotation(paragraph: &str) -> bool {
@@ -101,15 +133,15 @@ fn is_quotation(paragraph: &str) -> bool {
     if wrapped_in_quotes(trimmed) && content_chars(trimmed) >= 40 {
         return true;
     }
+    let chars: Vec<char> = trimmed.chars().collect();
+    let straight_quoted = paired_straight_quote_mask(&chars);
     let mut quoted = 0usize;
     let mut total = 0usize;
-    let mut depth_straight = false;
     let mut depth_curly = 0i32;
     let mut depth_corner = 0i32;
     let mut depth_white = 0i32;
-    for ch in trimmed.chars() {
+    for (idx, &ch) in chars.iter().enumerate() {
         match ch {
-            '"' => depth_straight = !depth_straight,
             '“' => depth_curly += 1,
             '”' => depth_curly = (depth_curly - 1).max(0),
             '「' => depth_corner += 1,
@@ -120,12 +152,39 @@ fn is_quotation(paragraph: &str) -> bool {
         }
         if is_content(ch) {
             total += 1;
-            if depth_straight || depth_curly > 0 || depth_corner > 0 || depth_white > 0 {
+            if straight_quoted[idx] || depth_curly > 0 || depth_corner > 0 || depth_white > 0 {
                 quoted += 1;
             }
         }
     }
     total >= 40 && quoted * 2 >= total
+}
+
+fn paired_straight_quote_mask(chars: &[char]) -> Vec<bool> {
+    let mut mask = vec![false; chars.len()];
+    let mut open_at: Option<usize> = None;
+    for (idx, &ch) in chars.iter().enumerate() {
+        if ch != '"' {
+            continue;
+        }
+        if let Some(start) = open_at {
+            if idx > 0 && !chars[idx - 1].is_whitespace() {
+                for slot in &mut mask[start..=idx] {
+                    *slot = true;
+                }
+                open_at = None;
+                continue;
+            }
+        }
+        let preceded_by_boundary = idx == 0
+            || chars[idx - 1].is_whitespace()
+            || matches!(chars[idx - 1], '(' | '[' | ':' | '：' | ',' | '，');
+        let followed_by_text = idx + 1 < chars.len() && !chars[idx + 1].is_whitespace();
+        if open_at.is_none() && preceded_by_boundary && followed_by_text {
+            open_at = Some(idx);
+        }
+    }
+    mask
 }
 
 fn wrapped_in_quotes(text: &str) -> bool {
@@ -182,5 +241,31 @@ After the references heading the discussion is prose again and it is long enough
             .unwrap();
         assert!(roles[bib_at + 1] == PassageRole::Bibliography);
         assert_eq!(*roles.last().unwrap(), PassageRole::Prose);
+    }
+
+    #[test]
+    fn inch_mark_and_numbered_appendix_heading_do_not_misclassify() {
+        let text = "\
+The glass tube was 5\" wide and the group recorded temperatures every thirty seconds across the full run.
+
+5. References
+
+Author A. Synthetic cooling entry long enough to sit in the reference list for testing.
+
+6. Appendix
+
+Additional bench notes placed in the appendix remain prose rather than bibliography entries.
+";
+        let roles = paragraph_roles(text);
+        assert_eq!(
+            roles,
+            vec![
+                PassageRole::Prose,
+                PassageRole::Bibliography,
+                PassageRole::Bibliography,
+                PassageRole::Prose,
+                PassageRole::Prose,
+            ]
+        );
     }
 }

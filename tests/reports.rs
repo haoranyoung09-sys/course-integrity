@@ -182,3 +182,54 @@ fn synthetic_batch_of_forty_files_finishes_quickly_in_debug() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn html_and_markdown_include_corpus_details_and_locations() {
+    let dir = std::env::temp_dir().join(format!("course-integrity-rich-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let shared = "In this synthetic cooling exercise the group recorded the temperature of two hundred millilitres of water in a glass beaker carefully.";
+    let near_a = "However, we measured the room temperature every thirty seconds on the open bench, and the water cooled steadily from sixty degrees to forty nine degrees.";
+    let near_b = "However, we measured the room temperature every thirty seconds on the open bench, and the liquid cooled slowly from sixty degrees to forty five degrees.";
+    fs::write(
+        dir.join("alpha.md"),
+        format!("Synthetic fixture.\n\n{shared}\n\n{near_a}\n"),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("beta.md"),
+        format!("Synthetic fixture.\n\n{shared}\n\n{near_b}\n"),
+    )
+    .unwrap();
+
+    let html_run = run(&[
+        "scan",
+        dir.to_str().unwrap(),
+        "--pairwise",
+        "--format",
+        "html",
+    ]);
+    assert!(
+        html_run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&html_run.stderr)
+    );
+    let html = String::from_utf8_lossy(&html_run.stdout);
+    assert!(html.contains("<nav class=\"toc\">"));
+    assert!(html.contains("Transition inventory"));
+    assert!(html.contains("<h3>Repetition</h3>"));
+    assert!(html.contains("Excluded as self"));
+    assert!(html.contains("Nearest passage below the threshold"));
+
+    let md_docx = run(&[
+        "scan",
+        "fixtures/synthetic/lab-report-en.docx",
+        "--format",
+        "markdown",
+    ]);
+    assert!(md_docx.status.success());
+    let md = String::from_utf8_lossy(&md_docx.stdout);
+    assert!(md.contains("(word/document.xml paragraph"));
+
+    let _ = fs::remove_dir_all(&dir);
+}

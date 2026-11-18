@@ -28,6 +28,6 @@ This version has no accounts, no encryption, and no access control. The person w
 
 The tool only reads the files you name. It does not execute them. It reads UTF-8 `.txt` and `.md`, `.docx`, and text-based `.pdf`. It refuses a single file larger than 8 MiB. A DOCX is a zip: more than 128 entries, an entry over 8 MiB uncompressed, or more than 32 MiB uncompressed in total is refused. XML that declares a DOCTYPE or entity is refused. Paths inside the zip that climb out of the archive are skipped.
 
-There is no network service in this repository. If you find a bug that writes outside the `--db` or `--out-dir` path you passed, open a GitHub issue. Do not attach real student work, a corpus database, or secrets. Version 0.1.x is the supported line for this first release.
+There is no network service in this repository. If you find a bug that writes outside the `--db` or `--out-dir` path you passed, open a GitHub issue. Do not attach real student work, a corpus database, or secrets. Version 0.3.x is the supported line for this release.
 
 The license is MIT. It does not add a rule about who may run the program. Course rules and privacy law still apply to the texts you choose to store.

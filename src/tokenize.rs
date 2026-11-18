@@ -179,13 +179,21 @@ pub fn shingles(tokens: &[Token]) -> BTreeSet<String> {
 
 pub fn score_shingles(query: &BTreeSet<String>, source: &BTreeSet<String>) -> ShingleScore {
     let shared = query.intersection(source).count();
-    let union = query.len() + source.len() - shared;
-    let (containment_basis_points, containment) = ratio(shared, query.len());
+    score_counts(shared, query.len(), source.len())
+}
+
+pub(crate) fn score_counts(
+    shared: usize,
+    query_shingles: usize,
+    source_shingles: usize,
+) -> ShingleScore {
+    let union = query_shingles + source_shingles - shared;
+    let (containment_basis_points, containment) = ratio(shared, query_shingles);
     let (jaccard_basis_points, jaccard) = ratio(shared, union);
     ShingleScore {
         shared,
-        query_shingles: query.len(),
-        source_shingles: source.len(),
+        query_shingles,
+        source_shingles,
         containment_basis_points,
         jaccard_basis_points,
         containment,
@@ -212,7 +220,11 @@ pub fn sentences(nfkc_text: &str) -> Vec<String> {
     while i < chars.len() {
         let ch = chars[i];
         if ch == '\n' {
-            push_sentence(&mut out, &mut buf);
+            if should_split_on_newline(&buf, &chars[i + 1..]) {
+                push_sentence(&mut out, &mut buf);
+            } else if !buf.trim().is_empty() && !buf.ends_with(char::is_whitespace) {
+                buf.push(' ');
+            }
             i += 1;
             continue;
         }
@@ -220,6 +232,7 @@ pub fn sentences(nfkc_text: &str) -> Vec<String> {
         if is_sentence_ender(ch)
             && !is_decimal_dot(&chars, i)
             && !is_multidot_abbreviation(&chars, i)
+            && !is_list_number_dot(&buf, ch)
             && !is_abbreviation(&buf)
         {
             i += 1;
@@ -237,6 +250,42 @@ pub fn sentences(nfkc_text: &str) -> Vec<String> {
         .map(|sentence| sentence.trim().to_string())
         .filter(|sentence| !sentence.is_empty() && !tokenize(sentence).is_empty())
         .collect()
+}
+
+fn should_split_on_newline(current_buf: &str, rest: &[char]) -> bool {
+    let trimmed = current_buf.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed.starts_with('#') || trimmed.ends_with(':') || trimmed.ends_with('：') {
+        return true;
+    }
+    let next_line: String = rest.iter().take_while(|ch| **ch != '\n').copied().collect();
+    starts_structural_line(next_line.trim_start())
+}
+
+fn starts_structural_line(line: &str) -> bool {
+    if line.is_empty() {
+        return false;
+    }
+    if line.starts_with('#')
+        || line.starts_with('>')
+        || line.starts_with("- ")
+        || line.starts_with("* ")
+        || line.starts_with("+ ")
+        || line.starts_with("• ")
+        || line.starts_with("· ")
+    {
+        return true;
+    }
+    let digits = line.chars().take_while(|ch| ch.is_ascii_digit()).count();
+    if digits > 0 {
+        let after = &line[digits..];
+        if after.starts_with(". ") || after.starts_with(") ") || after.starts_with("、") {
+            return true;
+        }
+    }
+    false
 }
 
 pub(crate) fn passage_drafts(text: &str) -> Vec<PassageDraft> {
@@ -286,6 +335,14 @@ fn is_closer(ch: char) -> bool {
         ch,
         '"' | '\'' | '\u{201d}' | '\u{2019}' | '』' | '」' | ')' | ']' | '）'
     )
+}
+
+fn is_list_number_dot(buf_including_dot: &str, ch: char) -> bool {
+    if ch != '.' {
+        return false;
+    }
+    let prefix = buf_including_dot.trim_end_matches('.').trim();
+    !prefix.is_empty() && prefix.len() <= 4 && prefix.chars().all(|c| c.is_ascii_digit())
 }
 
 fn is_decimal_dot(chars: &[char], index: usize) -> bool {
@@ -432,5 +489,15 @@ mod tests {
     #[test]
     fn short_banner_cannot_exact_match() {
         assert!(normalize_exact("Synthetic fixture.").chars().count() < MIN_NORMALIZED_CHARS);
+    }
+
+    #[test]
+    fn wrapped_lines_join_while_structural_lines_split() {
+        let wrapped = "We poured 200 ml of tap water\ninto a glass beaker and heated it\nuntil the water reached 60 C.";
+        assert_eq!(sentences(wrapped).len(), 1);
+
+        let list_and_heading =
+            "## Steps\n- Measure 200 ml of water\n- Heat to 60 C\n1. Record every 30 s";
+        assert_eq!(sentences(list_and_heading).len(), 4);
     }
 }

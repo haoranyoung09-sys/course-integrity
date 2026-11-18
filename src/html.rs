@@ -33,15 +33,29 @@ pub(crate) fn render_html(bundle: &Bundle) -> String {
     if bundle.files.is_empty() {
         out.push_str("<p>No files were reviewed.</p>");
     }
-    for file in &bundle.files {
-        render_file(&mut out, file);
+    if bundle.files.len() > 1 {
+        out.push_str("<nav class=\"toc\"><h2>Files</h2><ul>");
+        for (index, file) in bundle.files.iter().enumerate() {
+            let anchor = format!("file-{}", index + 1);
+            out.push_str("<li><a href=\"#");
+            out.push_str(&anchor);
+            out.push_str("\">");
+            out.push_str(&escape(&file.source_label));
+            out.push_str("</a> <span class=\"quiet\">(");
+            out.push_str(&escape(&file.evidence.level));
+            out.push_str(")</span></li>");
+        }
+        out.push_str("</ul></nav>\n");
+    }
+    for (index, file) in bundle.files.iter().enumerate() {
+        render_file(&mut out, index + 1, file);
     }
     out.push_str("</main>\n</body>\n</html>\n");
     out
 }
 
-fn render_file(out: &mut String, file: &crate::report::FileReview) {
-    out.push_str("<article>\n<h2>");
+fn render_file(out: &mut String, file_index: usize, file: &crate::report::FileReview) {
+    out.push_str(&format!("<article id=\"file-{file_index}\">\n<h2>"));
     out.push_str(&escape(&file.source_label));
     out.push_str("</h2>\n");
     out.push_str("<p class=\"meta\">");
@@ -84,13 +98,28 @@ fn render_file(out: &mut String, file: &crate::report::FileReview) {
     );
     item(
         out,
+        "Sentence length (min / median / max)",
+        &format!(
+            "{} / {} / {}",
+            fmt_opt(stats.sentence_length.min),
+            fmt_opt(stats.sentence_length.median),
+            fmt_opt(stats.sentence_length.max)
+        ),
+    );
+    item(
+        out,
         "Mean sentence length",
         &fmt_opt(stats.sentence_length.mean),
     );
     item(
         out,
-        "Sentence-length variation",
+        "Sentence-length variation (stdev)",
         &fmt_opt(stats.sentence_length.sample_stdev),
+    );
+    item(
+        out,
+        "Coefficient of variation",
+        &fmt_opt(stats.sentence_length.coefficient_of_variation),
     );
     item(
         out,
@@ -99,38 +128,123 @@ fn render_file(out: &mut String, file: &crate::report::FileReview) {
     );
     item(
         out,
+        "Hapax tokens / ratio",
+        &format!(
+            "{} / {}",
+            stats.vocabulary.hapax_count,
+            fmt_opt(stats.vocabulary.hapax_ratio)
+        ),
+    );
+    item(
+        out,
+        "Numeric tokens excluded from TTR",
+        &stats.vocabulary.numeric_tokens_excluded.to_string(),
+    );
+    item(
+        out,
         "Transition phrases",
-        &stats.transitions.total.to_string(),
+        &format!(
+            "{} ({} per 100 sentences)",
+            stats.transitions.total,
+            fmt_opt(stats.transitions.per_100_sentences)
+        ),
     );
     out.push_str("</dl>");
     out.push_str("<p class=\"quiet\">");
     out.push_str(&escape(&stats.sentence_length.stability_note));
     out.push(' ');
     out.push_str(&escape(&stats.vocabulary.note));
-    out.push_str("</p></section>\n");
+    out.push_str("</p>");
+    if !stats.transitions.inventory.is_empty() {
+        out.push_str("<h4>Transition inventory</h4><ul>");
+        for phrase in &stats.transitions.inventory {
+            out.push_str("<li><code>");
+            out.push_str(&escape(&phrase.phrase));
+            out.push_str("</code>: ");
+            out.push_str(&phrase.count.to_string());
+            out.push_str("</li>");
+        }
+        out.push_str("</ul>");
+    }
+    out.push_str("</section>\n");
+    out.push_str("<section><h3>Repetition</h3><p class=\"quiet\">");
+    out.push_str(&escape(stats.repetition.note));
+    out.push_str("</p><dl>");
+    item(
+        out,
+        "Duplicate sentence types",
+        &stats.repetition.duplicate_sentence_types.to_string(),
+    );
+    item(
+        out,
+        "Extra duplicate copies",
+        &stats.repetition.extra_duplicate_sentences.to_string(),
+    );
+    out.push_str("</dl>");
+    if !stats.repetition.examples.is_empty() {
+        out.push_str("<h4>Duplicate sentence examples</h4><ul>");
+        for example in &stats.repetition.examples {
+            out.push_str("<li>");
+            out.push_str(&escape(example));
+            out.push_str("</li>");
+        }
+        out.push_str("</ul>");
+    }
+    if stats.repetition.repeated_phrases.is_empty() {
+        out.push_str("<p class=\"quiet\">No 3-token phrases reached 3 occurrences.</p>");
+    } else {
+        out.push_str("<h4>Repeated phrases (3+ occurrences)</h4><ul>");
+        for phrase in &stats.repetition.repeated_phrases {
+            out.push_str("<li><code>");
+            out.push_str(&escape(&phrase.phrase));
+            out.push_str("</code> &times; ");
+            out.push_str(&phrase.count.to_string());
+            out.push_str("</li>");
+        }
+        out.push_str("</ul>");
+    }
+    out.push_str("</section>\n");
     out.push_str("<section><h3>Paragraphs</h3>");
-    for paragraph in &file.paragraphs {
-        let location = file
-            .paragraph_locations
-            .get(paragraph.index - 1)
-            .map(String::as_str)
-            .unwrap_or("paragraph");
-        out.push_str("<h4>");
-        out.push_str(&escape(&format!(
-            "Paragraph {} ({location})",
-            paragraph.index
-        )));
-        out.push_str("</h4><p>");
-        out.push_str(&escape(&paragraph.preview));
-        out.push_str("</p><p class=\"quiet\">");
-        out.push_str(&escape(&format!(
-            "{} sentences, mean length {}, type-token ratio {}, transition hits {}.",
-            paragraph.sentence_count,
-            fmt_opt(paragraph.sentence_length.mean),
-            fmt_opt(paragraph.type_token_ratio),
-            paragraph.transition_total
-        )));
-        out.push_str("</p>");
+    if file.paragraphs.is_empty() {
+        out.push_str("<p>No paragraphs were found.</p>");
+    } else {
+        let open_attr = if file.paragraphs.len() <= 8 {
+            " open"
+        } else {
+            ""
+        };
+        out.push_str(&format!(
+            "<details{open_attr}><summary>{} paragraph(s)</summary>",
+            file.paragraphs.len()
+        ));
+        for paragraph in &file.paragraphs {
+            let location = file
+                .paragraph_locations
+                .get(paragraph.index - 1)
+                .map(String::as_str)
+                .unwrap_or("paragraph");
+            out.push_str("<h4>");
+            out.push_str(&escape(&format!(
+                "Paragraph {} ({location})",
+                paragraph.index
+            )));
+            out.push_str("</h4><p>");
+            out.push_str(&escape(&paragraph.preview));
+            out.push_str("</p><p class=\"quiet\">");
+            out.push_str(&escape(&format!(
+                "{} sentences, {} words / {} Han or kana / {} numeric, mean length {}, type-token ratio {}, transition hits {}, extra duplicate sentences {}.",
+                paragraph.sentence_count,
+                paragraph.token_counts.word,
+                paragraph.token_counts.cjk_or_kana,
+                paragraph.token_counts.numeric,
+                fmt_opt(paragraph.sentence_length.mean),
+                fmt_opt(paragraph.type_token_ratio),
+                paragraph.transition_total,
+                paragraph.extra_duplicate_sentences
+            )));
+            out.push_str("</p>");
+        }
+        out.push_str("</details>");
     }
     out.push_str("</section>\n");
     render_corpus(out, file);
@@ -214,15 +328,47 @@ fn render_corpus(out: &mut String, file: &crate::report::FileReview) {
     };
     out.push_str("<p class=\"quiet\">");
     out.push_str(&escape(&format!(
-        "Database {} has {} document(s) and {} stored characters. Threshold {} basis points.",
+        "Database {} has {} document(s) and {} stored characters. Threshold {} basis points, at least {} shared shingles.",
         corpus.database_path,
         corpus.coverage.document_count,
         corpus.coverage.total_characters,
-        corpus.min_containment_basis_points
+        corpus.min_containment_basis_points,
+        corpus.min_shared_shingles
     )));
-    out.push_str("</p><p>");
-    out.push_str(&escape(corpus.coverage.scope));
     out.push_str("</p>");
+    if !corpus.notes.is_empty() {
+        out.push_str("<ul>");
+        for note in &corpus.notes {
+            out.push_str("<li>");
+            out.push_str(&escape(note));
+            out.push_str("</li>");
+        }
+        out.push_str("</ul>");
+    }
+    if !corpus.excluded_self.is_empty() {
+        out.push_str("<h4>Excluded as self</h4><ul>");
+        for item in &corpus.excluded_self {
+            out.push_str("<li>");
+            out.push_str(&escape(&format!(
+                "id {}: {} — {}",
+                item.document_id, item.source_label, item.reason
+            )));
+            out.push_str("</li>");
+        }
+        out.push_str("</ul>");
+    }
+    if !corpus.document_exact_matches.is_empty() {
+        out.push_str("<h4>Identical normalized documents</h4><ul>");
+        for item in &corpus.document_exact_matches {
+            out.push_str("<li>");
+            out.push_str(&escape(&format!(
+                "id {} ({}): {}",
+                item.source_document_id, item.source_label, item.note
+            )));
+            out.push_str("</li>");
+        }
+        out.push_str("</ul>");
+    }
     if corpus.matches.is_empty() {
         out.push_str(
             "<h4>Main overlaps</h4><p>No prose passage met the exact or near-exact threshold.</p>",
@@ -232,12 +378,32 @@ fn render_corpus(out: &mut String, file: &crate::report::FileReview) {
         for hit in &corpus.matches {
             render_hit(out, hit);
         }
+        if corpus.truncated_match_count > 0 {
+            out.push_str("<p class=\"quiet\">");
+            out.push_str(&escape(&format!(
+                "{} additional main overlaps were omitted from this report.",
+                corpus.truncated_match_count
+            )));
+            out.push_str("</p>");
+        }
     }
     if !corpus.context_overlaps.is_empty() {
         out.push_str("<h4>Set aside</h4><p>Quotations, bibliography sections, and boilerplate are listed here so you can see them. They are not treated as evidence of copied prose.</p>");
         for hit in &corpus.context_overlaps {
             render_hit(out, hit);
         }
+        if corpus.truncated_context_count > 0 {
+            out.push_str("<p class=\"quiet\">");
+            out.push_str(&escape(&format!(
+                "{} additional set-aside overlaps were omitted from this report.",
+                corpus.truncated_context_count
+            )));
+            out.push_str("</p>");
+        }
+    }
+    if let Some(hit) = &corpus.strongest_below_threshold {
+        out.push_str("<h4>Nearest passage below the threshold</h4><p class=\"quiet\">This pair is not a match.</p>");
+        render_hit(out, hit);
     }
     out.push_str("</section>\n");
 }
@@ -250,20 +416,24 @@ fn render_hit(out: &mut String, hit: &crate::corpus::MatchHit) {
     )));
     out.push_str("</strong></p><p>");
     out.push_str(&escape(&format!(
-        "Exact: {}. Containment basis points: {}. Shared shingles: {}. Query shingles (denominator): {}.",
+        "Exact: {}. Meets threshold: {}. Containment basis points: {}. Jaccard basis points: {}. Shared shingles: {}. Query shingles (denominator): {}. Source shingles: {}.",
         if hit.exact { "yes" } else { "no" },
+        if hit.meets_threshold { "yes" } else { "no" },
         hit.containment_basis_points
             .map(|points| points.to_string())
             .unwrap_or_else(|| "n/a".to_string()),
+        hit.jaccard_basis_points
+            .map(|points| points.to_string())
+            .unwrap_or_else(|| "n/a".to_string()),
         hit.shared_shingles,
-        hit.query_shingles
+        hit.query_shingles,
+        hit.source_shingles
     )));
+    out.push_str("</p><p class=\"quiet\">");
+    out.push_str(&escape(hit.set_aside.unwrap_or(hit.interpretation)));
+    out.push(' ');
+    out.push_str(&escape(hit.score_note));
     out.push_str("</p>");
-    if let Some(reason) = hit.set_aside {
-        out.push_str("<p>");
-        out.push_str(&escape(reason));
-        out.push_str("</p>");
-    }
     out.push_str("<blockquote><p>");
     out.push_str(&escape(&hit.query_excerpt));
     out.push_str("</p><p>");
@@ -317,4 +487,7 @@ dd { margin: 0; }
 .hit { background: white; border: 1px solid #e4dccb; padding: 0.75rem 1rem; margin: 0.75rem 0; }
 blockquote { margin: 0.5rem 0 0; padding-left: 0.8rem; border-left: 3px solid #e2d3b0; }
 details { margin-top: 1rem; }
+.toc { margin: 1.5rem 0; padding: 0.75rem 1rem; background: #fff; border: 1px solid #e4dccb; }
+.toc ul { margin: 0.4rem 0 0; padding-left: 1.25rem; }
+.toc a { color: #3d3121; }
 ";
