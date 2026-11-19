@@ -1,4 +1,4 @@
-# course-integrity 0.3.0 precheck
+# course-integrity 0.4.0 precheck
 
 > Descriptive review signals only. These figures are not an AI probability, not a calibrated risk score, not a confidence interval, and not an accuracy claim. They are insufficient evidence for authorship. A similarity match is not a plagiarism verdict.
 
@@ -21,6 +21,14 @@ Scope: original UTF-8 file. Newline style: lf.
 - No hidden controls or unusual spaces were found. For a UTF-8 file, unusual newlines would be listed here too.
 
 No listed artifacts.
+
+### Optional local classifier
+
+- Status: not_run
+- Reason: Pass --ai-classify to run the optional local model. No score was produced.
+- A missing model, a skipped chunk, or a failed run is not 0%. No score is emitted in those cases.
+
+No classifier chunks were scored.
 
 ### What was read
 
@@ -106,7 +114,7 @@ Transition phrases are a fixed inventory counted for description. English phrase
 
 ### Paragraphs
 
-#### Paragraph 1
+#### Paragraph 1 (paragraph 1)
 
 > Synthetic teaching example for course-integrity. Not a student submission. Not labeled as human-written or AI-written. Not ground truth.
 
@@ -117,7 +125,7 @@ Transition phrases are a fixed inventory counted for description. English phrase
 - Transition hits: 0
 - Extra duplicate sentences: 0
 
-#### Paragraph 2
+#### Paragraph 2 (paragraph 2)
 
 # Cooling a beaker of water
 
@@ -128,7 +136,7 @@ Transition phrases are a fixed inventory counted for description. English phrase
 - Transition hits: 0
 - Extra duplicate sentences: 0
 
-#### Paragraph 3
+#### Paragraph 3 (paragraph 3)
 
 Course context: a fictional first-year lab, PHYS 199. The numbers below were chosen for this example.
 
@@ -139,7 +147,7 @@ Course context: a fictional first-year lab, PHYS 199. The numbers below were cho
 - Transition hits: 0
 - Extra duplicate sentences: 0
 
-#### Paragraph 4
+#### Paragraph 4 (paragraph 4)
 
 ## Method
 
@@ -150,7 +158,7 @@ Course context: a fictional first-year lab, PHYS 199. The numbers below were cho
 - Transition hits: 0
 - Extra duplicate sentences: 0
 
-#### Paragraph 5
+#### Paragraph 5 (paragraph 5)
 
 We poured 200 ml of tap water into a glass beaker and heated it until the water reached 60 C. The beaker then stood on the open bench. We recorded the temperatu…
 
@@ -161,7 +169,7 @@ We poured 200 ml of tap water into a glass beaker and heated it until the water 
 - Transition hits: 0
 - Extra duplicate sentences: 0
 
-#### Paragraph 6
+#### Paragraph 6 (paragraph 6)
 
 ## Data
 
@@ -172,7 +180,7 @@ We poured 200 ml of tap water into a glass beaker and heated it until the water 
 - Transition hits: 0
 - Extra duplicate sentences: 0
 
-#### Paragraph 7
+#### Paragraph 7 (paragraph 7)
 
 At 0 s the temperature was 60 C. At 30 s it was 57 C. At 60 s it was 55 C. At 90 s it was 53 C. At 120 s it was 51 C. At 150 s it was 50 C. At 180 s it was 49 C…
 
@@ -183,7 +191,7 @@ At 0 s the temperature was 60 C. At 30 s it was 57 C. At 60 s it was 55 C. At 90
 - Transition hits: 0
 - Extra duplicate sentences: 0
 
-#### Paragraph 8
+#### Paragraph 8 (paragraph 8)
 
 ## Comment
 
@@ -194,7 +202,7 @@ At 0 s the temperature was 60 C. At 30 s it was 57 C. At 60 s it was 55 C. At 90
 - Transition hits: 0
 - Extra duplicate sentences: 0
 
-#### Paragraph 9
+#### Paragraph 9 (paragraph 9)
 
 The temperature fell quickly at first and then more slowly. However, we never measured the room temperature, so we cannot say how close the water came to the ro…
 
@@ -234,7 +242,7 @@ No local corpus was queried because --db was not set. Overlap was not checked. T
 ### Limitations
 
 - DOCX and text-based PDF are extracted to plain text. Legacy .doc, scanned pages, images, and charts are not read. OCR is not included.
-- No trained model is included, and none of the figures is a probability of AI use.
+- Writing statistics are not a trained-model score. The optional classifier, when it is run, reports an uncalibrated class-1 softmax. That number is not a probability that the text was written by AI.
 - Chinese text is tokenized per character. There is no dictionary word segmenter.
 - Near-exact matching uses 4-token shingles. Paraphrase, summary, and translation are not detected.
 - Sentence boundaries are heuristic. A small set of abbreviations and decimal points is handled; other dots can split or join sentences.

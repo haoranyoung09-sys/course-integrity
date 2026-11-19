@@ -85,9 +85,17 @@ pub const ARTIFACT_DESC: &str = "Hidden-character and newline notes are a determ
 
 pub const ARTIFACT_EXTRACTED: &str = "For DOCX and PDF, this inventory looks at extracted text only. The extractor inserts paragraph breaks, so newline style is not reported for those formats. A missing or odd character can be an extraction limit, including a PDF font encoding, rather than something that was typed.";
 
+pub const AI_SCORE_LABEL: &str = "AI 模型分类分数（未校准） / AI classifier score (uncalibrated)";
+
+pub const AI_SCORE_DISTINCTION: &str = "This number is the softmax of class index 1, scaled from 0 to 100. Class index 0 is human and class index 1 is AI in the official AIGC v3 demo and training code. It is not the percentage of this text that was written by AI, and it is not a calibrated probability of authorship.";
+
+pub const AI_FLAGGED_SHARE: &str = "Classifier-flagged character share uses only characters inside chunks that were actually scored. A chunk is flagged when its AI-class softmax is greater than 0.5. The denominator is that scored-character count, not the length of the file. This share is not the portion of the file that is AI-written.";
+
+pub const AI_NOT_RUN: &str = "A missing model, a skipped chunk, or a failed run is not 0%. No score is emitted in those cases.";
+
 pub const LIMITATIONS: &[&str] = &[
     "DOCX and text-based PDF are extracted to plain text. Legacy .doc, scanned pages, images, and charts are not read. OCR is not included.",
-    "No trained model is included, and none of the figures is a probability of AI use.",
+    "Writing statistics are not a trained-model score. The optional classifier, when it is run, reports an uncalibrated class-1 softmax. That number is not a probability that the text was written by AI.",
     "Chinese text is tokenized per character. There is no dictionary word segmenter.",
     "Near-exact matching uses 4-token shingles. Paraphrase, summary, and translation are not detected.",
     "Sentence boundaries are heuristic. A small set of abbreviations and decimal points is handled; other dots can split or join sentences.",
@@ -136,6 +144,10 @@ mod tests {
             DB_COMPAT,
             ARTIFACT_DESC,
             ARTIFACT_EXTRACTED,
+            AI_SCORE_LABEL,
+            AI_SCORE_DISTINCTION,
+            AI_FLAGGED_SHARE,
+            AI_NOT_RUN,
         ] {
             assert!(
                 methodology.contains(required),

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
+use crate::ai_class::{classify_text, default_models_dir, default_script, ClassifierOptions};
 use crate::corpus::{
     boilerplate_passages, threshold_basis_points, AddOutcome, CheckOptions, CorpusIndex, Database,
 };
@@ -81,6 +82,18 @@ struct ScanArgs {
     /// Compare scanned files against each other in memory without writing a database.
     #[arg(long)]
     pairwise: bool,
+    /// Run the optional local EN/ZH classifier. Does nothing unless models were installed.
+    #[arg(long)]
+    ai_classify: bool,
+    /// Directory from `classifier/setup_models.py`.
+    #[arg(long, value_name = "DIR")]
+    ai_models: Option<PathBuf>,
+    /// auto, en, or zh. en or zh forces that model on mixed paragraphs and says so.
+    #[arg(long, default_value = "auto")]
+    ai_language: String,
+    /// Seconds to wait for one file's classifier process.
+    #[arg(long, default_value_t = 180u64)]
+    ai_timeout: u64,
 }
 
 #[derive(Parser)]
@@ -221,6 +234,19 @@ fn scan(args: ScanArgs) -> Result<(), Error> {
         let corpus = corpus_index
             .as_ref()
             .map(|index| index.check(&file.label, &file.text, &analysis, &options, &[]));
+        let ai_classifier = classify_text(
+            &file.text,
+            &file.origin,
+            &file.locations,
+            &ClassifierOptions {
+                enabled: args.ai_classify,
+                models_dir: args.ai_models.clone().unwrap_or_else(default_models_dir),
+                script: default_script(),
+                python: "python3".to_string(),
+                language: args.ai_language.clone(),
+                timeout: std::time::Duration::from_secs(args.ai_timeout),
+            },
+        );
         files.push(review_file(ReviewInput {
             label: &file.label,
             text: &file.text,
@@ -229,6 +255,7 @@ fn scan(args: ScanArgs) -> Result<(), Error> {
             extraction_notes: &file.diagnostics,
             paragraph_locations: &file.locations,
             analysis,
+            ai_classifier,
             corpus,
         }));
     }

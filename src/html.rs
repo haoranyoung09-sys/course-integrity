@@ -77,6 +77,7 @@ fn render_file(out: &mut String, file_index: usize, file: &crate::report::FileRe
         out.push_str("</ul></section>\n");
     }
     render_artifacts(out, file);
+    render_ai(out, file);
     out.push_str("<section><h3>How to read the counts</h3><ul>");
     for note in &file.notes {
         out.push_str("<li>");
@@ -318,6 +319,65 @@ fn render_artifacts(out: &mut String, file: &crate::report::FileReview) {
         out.push_str("</p>");
     }
     out.push_str("</section>\n");
+}
+
+fn render_ai(out: &mut String, file: &crate::report::FileReview) {
+    let ai = &file.ai_classifier;
+    out.push_str("<section><h3>Optional local classifier</h3>");
+    out.push_str("<p class=\"quiet\">");
+    out.push_str(&escape(&format!("Status: {}.", ai.status)));
+    if let Some(reason) = &ai.reason {
+        out.push(' ');
+        out.push_str(&escape(reason));
+    }
+    out.push_str("</p>");
+    if ai.status != "ok" {
+        out.push_str("<p>");
+        out.push_str(&escape(ai.not_a_zero_result));
+        out.push_str("</p>");
+    }
+    for chunk in &ai.chunks {
+        out.push_str("<div class=\"hit\"><p><strong>");
+        out.push_str(&escape(&format!(
+            "{} · {} · characters {}–{}",
+            chunk.location, chunk.language, chunk.char_start, chunk.char_end
+        )));
+        out.push_str("</strong></p>");
+        if let Some(score) = chunk.score_0_to_100 {
+            out.push_str("<p><strong>");
+            out.push_str(&escape(ai.label));
+            out.push_str(": ");
+            out.push_str(&escape(&format!("{score}")));
+            out.push_str("</strong></p><p>");
+            out.push_str(&escape(ai.distinction));
+            out.push_str("</p><p class=\"quiet\">");
+            out.push_str(&escape(&format!(
+                "Predicted class: {}. Tokens: {} of 512.",
+                chunk.predicted_class.as_deref().unwrap_or("unknown"),
+                chunk.token_count.unwrap_or(0)
+            )));
+            out.push_str("</p>");
+        } else {
+            out.push_str("<p>Not scored: ");
+            out.push_str(&escape(chunk.reason.as_deref().unwrap_or("not_scored")));
+            out.push_str("</p>");
+        }
+        out.push_str("</div>");
+    }
+    if let Some(share) = ai.flagged_character_share {
+        out.push_str("<p>");
+        out.push_str(&escape(&format!(
+            "Classifier-flagged character share: {share} ({}/{} scored characters). {}",
+            ai.flagged_characters, ai.scored_characters, ai.flagged_share_definition
+        )));
+        out.push_str("</p>");
+    }
+    out.push_str("<p class=\"quiet\">");
+    out.push_str(&escape(&format!(
+        "Coverage: {} scored, {} skipped, {} not covered by a tokenizer window.",
+        ai.scored_characters, ai.skipped_characters, ai.uncovered_characters
+    )));
+    out.push_str("</p></section>\n");
 }
 
 fn render_corpus(out: &mut String, file: &crate::report::FileReview) {

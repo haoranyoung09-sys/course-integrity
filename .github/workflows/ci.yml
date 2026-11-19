@@ -32,3 +32,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.83.0
       - name: cargo test
         run: cargo test --locked
+      - name: classifier protocol tests
+        if: runner.os == 'Linux'
+        run: python3 -m unittest classifier/test_protocol.py

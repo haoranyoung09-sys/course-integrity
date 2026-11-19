@@ -1,6 +1,6 @@
 # Method
 
-`course-integrity` 0.3.0 reports descriptive review signals for UTF-8 `.txt` and `.md` drafts, `.docx` files, and text-based `.pdf` files, together with a hidden-character inventory and optional local corpus overlap. This page is the contract for those signals. Schema version of the local database is 1. A later change to tokenization or shingles will refuse an older database file instead of quietly rescoring it.
+`course-integrity` 0.4.0 reports descriptive review signals for UTF-8 `.txt` and `.md` drafts, `.docx` files, and text-based `.pdf` files, together with a hidden-character inventory and optional local corpus overlap. This page is the contract for those signals. Schema version of the local database is 1. A later change to tokenization or shingles will refuse an older database file instead of quietly rescoring it.
 
 The sentences below are the same strings the report prints.
 
@@ -107,6 +107,24 @@ Hidden-character and newline notes are a deterministic inventory of code points 
 For DOCX and PDF, this inventory looks at extracted text only. The extractor inserts paragraph breaks, so newline style is not reported for those formats. A missing or odd character can be an extraction limit, including a PDF font encoding, rather than something that was typed.
 
 The inventory lists a byte order mark, CRLF and bare CR in UTF-8 files, trailing ASCII spaces or tabs, no-break spaces, zero-width characters, bidi controls, and a few other format characters. Ideographic spaces (U+3000) are counted in a note and are not treated as hidden controls. The scan does not change the file.
+
+## Optional local AI classifier
+
+The optional classifier is separate from the character inventory, the writing statistics, and the corpus overlap. It does not turn those signals into an AI rate.
+
+AI 模型分类分数（未校准） / AI classifier score (uncalibrated)
+
+This number is the softmax of class index 1, scaled from 0 to 100. Class index 0 is human and class index 1 is AI in the official AIGC v3 demo and training code. It is not the percentage of this text that was written by AI, and it is not a calibrated probability of authorship.
+
+Classifier-flagged character share uses only characters inside chunks that were actually scored. A chunk is flagged when its AI-class softmax is greater than 0.5. The denominator is that scored-character count, not the length of the file. This share is not the portion of the file that is AI-written.
+
+A missing model, a skipped chunk, or a failed run is not 0%. No score is emitted in those cases.
+
+The English model is `yuchuantian/AIGC_detector_env3` revision `3ceb1d1bb7b9ca11585ce3f4299950e1c465b6d8`. The Chinese model is `yuchuantian/AIGC_detector_zhv3` revision `47695ff451b32c225dd938f4f478f7fdc6aa6bb0`. Both model cards name Apache-2.0. The published files are `pytorch_model.bin`. Setup loads that pickle with `torch.load(..., weights_only=True)` and writes `model.safetensors` with metadata `format=pt`, which Transformers 4.46 requires before it will read the file. The pickle file is then deleted. Later inference reads only the safetensors file, with `local_files_only` and hub offline mode. `trust_remote_code` is not used.
+
+Class index 0 is human and class index 1 is AI. The author's Hugging Face Space `app.py` sets `id2label = ['Human', 'AI']` and `['人类', 'AI']`, and `predict_func` takes `argmax` of the two-class softmax. The training file `dataset.py` agrees after the variable swap is followed, not from the names alone: `load_texts_original` returns `(chatgpt_texts, human_texts)`, `chatgpt_load_datasets` binds that pair to `(real_train, fake_train)`, and `EncodedDataset` then uses label 0 for `fake_texts` (the human answers) and label 1 for `real_texts` (the ChatGPT answers). The comment there is `real->label1->chatgpt`. The pinned `config.json` has no `id2label`, so the class names are not read from the checkpoint. The demo's displayed "probability" is the winning-class softmax, which is a different number from the class-1 softmax this tool prints.
+
+Each scored chunk uses at most 512 tokens, the `max_length` in that demo. Longer paragraphs are split into non-overlapping token windows with character offsets. Chunk scores are not averaged into one document percentage. A mixed-language paragraph is not scored unless `--ai-language` forces one model, and that force is labeled on the chunk. Short, mixed, academic, and non-native English text can be scored wrongly; this repository does not claim an accuracy for those cases. PDF and DOCX scores use extracted text only.
 
 ## Limits that are easy to forget
 
