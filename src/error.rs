@@ -45,7 +45,7 @@ pub enum Error {
 impl Error {
     pub fn exit_code(&self) -> i32 {
         match self {
-            Error::BadThreshold(_) | Error::Output(_) => 2,
+            Error::BadThreshold(_) | Error::Output(_) | Error::LabelRequiresFile => 2,
             _ => 1,
         }
     }
@@ -105,7 +105,7 @@ impl fmt::Display for Error {
             Error::LabelRequiresFile => {
                 write!(
                     f,
-                    "--label can be used only with a single file, not a directory"
+                    "--label can be used only with a single file, not a directory or multiple inputs"
                 )
             }
             Error::Schema { path, found } => write!(

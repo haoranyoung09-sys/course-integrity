@@ -309,3 +309,101 @@ fn pairwise_scan_compares_in_memory_and_rejects_db() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn multi_path_scan_skips_generated_reviews_and_short_pairwise_and_removes_by_label() {
+    let dir =
+        std::env::temp_dir().join(format!("course-integrity-cli-multi-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("dir");
+    let shared = "In this synthetic cooling exercise the group recorded the temperature of two hundred millilitres of water in a glass beaker after heating it.";
+    let a = dir.join("a.md");
+    let b = dir.join("b.md");
+    fs::write(&a, format!("Synthetic fixture.\n\n{shared}\n")).expect("a");
+    fs::write(&b, format!("Synthetic fixture.\n\n{shared}\n")).expect("b");
+    fs::write(
+        dir.join("old.review.md"),
+        "Generated report should be skipped.\n",
+    )
+    .expect("review");
+    fs::write(dir.join("empty1.txt"), "").expect("e1");
+    fs::write(dir.join("empty2.txt"), "").expect("e2");
+
+    let bad_label = run(&[
+        "scan",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+        "--label",
+        "one",
+    ]);
+    assert_eq!(bad_label.status.code(), Some(2));
+
+    let multi = json_stdout(&run(&[
+        "scan",
+        a.to_str().unwrap(),
+        b.to_str().unwrap(),
+        "--pairwise",
+        "--format",
+        "json",
+    ]));
+    assert_eq!(multi["files"].as_array().unwrap().len(), 2);
+    assert!(!multi["files"][0]["corpus"]["matches"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let dir_out = json_stdout(&run(&[
+        "scan",
+        dir.to_str().unwrap(),
+        "--pairwise",
+        "--format",
+        "json",
+    ]));
+    let dir_files = dir_out["files"].as_array().unwrap();
+    assert_eq!(dir_files.len(), 4);
+    assert!(dir_files
+        .iter()
+        .all(|f| !f["source_label"].as_str().unwrap().ends_with(".review.md")));
+    let empty1 = dir_files
+        .iter()
+        .find(|f| f["source_label"].as_str().unwrap().ends_with("empty1.txt"))
+        .expect("empty1");
+    assert!(empty1["corpus"]["document_exact_matches"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let db = temp_db("remove-label");
+    let db_arg = db.to_str().unwrap();
+    let added = json_stdout(&run(&[
+        "corpus",
+        "add",
+        a.to_str().unwrap(),
+        "--db",
+        db_arg,
+        "--label",
+        "./sub\\draft.md",
+        "--format",
+        "json",
+    ]));
+    assert_eq!(added["results"][0]["status"], "inserted");
+    let removed = json_stdout(&run(&[
+        "corpus",
+        "remove",
+        "--db",
+        db_arg,
+        "--label",
+        "sub/draft.md",
+        "--format",
+        "json",
+    ]));
+    assert_eq!(removed.as_array().unwrap().len(), 1);
+    assert_eq!(removed[0]["source_label"], "sub/draft.md");
+    let listed = json_stdout(&run(&[
+        "corpus", "list", "--db", db_arg, "--format", "json",
+    ]));
+    assert!(listed["documents"].as_array().unwrap().is_empty());
+
+    drop_db(&db);
+    let _ = fs::remove_dir_all(&dir);
+}

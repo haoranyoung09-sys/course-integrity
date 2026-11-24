@@ -109,9 +109,10 @@ cargo run --locked -- corpus check fixtures/synthetic/group_draft.md \
 cargo run --locked -- corpus stats --db .course-integrity/demo.db
 cargo run --locked -- corpus list --db .course-integrity/demo.db
 cargo run --locked -- corpus remove --db .course-integrity/demo.db --id 1
+cargo run --locked -- corpus remove --db .course-integrity/demo.db --label fixtures/synthetic/shared_prompt.md
 ```
 
-`corpus remove --id` deletes that row and its passages from the local file only.
+`corpus remove --id` (or `--label`) deletes matching row(s) and their passages from the local file only.
 
 Compare a draft with the lab handout without storing the handout:
 
@@ -121,10 +122,11 @@ cargo run --locked -- scan fixtures/synthetic/group_draft.md \
   --db .course-integrity/demo.db
 ```
 
-Compare drafts inside a folder against each other in memory without creating a database:
+Compare drafts inside a folder (or multiple file paths) against each other in memory without creating a database:
 
 ```bash
 cargo run --locked -- scan fixtures/synthetic --pairwise --format html --out-dir /tmp/ci-pairwise
+cargo run --locked -- scan fixtures/synthetic/en_source.md fixtures/synthetic/en_exact_paragraph.md --pairwise
 ```
 
 `corpus add` stores the full original text of each UTF-8 file that has a passage of at least 40 normalized characters, or the extracted plain text of a DOCX or PDF, plus a normalized copy and the shingles. Short files are skipped and are not written. The original DOCX or PDF bytes are not stored. See [docs/privacy.md](docs/privacy.md).

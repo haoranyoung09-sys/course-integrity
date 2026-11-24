@@ -359,16 +359,30 @@ fn render_corpus(out: &mut String, corpus: &Option<CorpusSection>) {
         out.push_str(&format!("{NOT_QUERIED_LINE}\n\n"));
         return;
     };
-    out.push_str(&format!("- Database: {}\n", corpus.database_path));
-    out.push_str(&format!(
-        "- Documents: {}\n- Passages: {}\n- Near-exact comparable passages: {}\n- Stored characters: {}\n- Threshold: {} basis points, at least {} shared shingles\n\n",
-        corpus.coverage.document_count,
-        corpus.coverage.passage_count,
-        corpus.coverage.comparable_passage_count,
-        corpus.coverage.total_characters,
-        corpus.min_containment_basis_points,
-        corpus.min_shared_shingles
-    ));
+    let is_pairwise = corpus.database_path.starts_with("in-memory pairwise");
+    if is_pairwise {
+        out.push_str(&format!("- Comparison mode: {}\n", corpus.database_path));
+        out.push_str(&format!(
+            "- Comparable files: {}\n- Passages: {}\n- Near-exact comparable passages: {}\n- Characters in scope: {}\n- Threshold: {} basis points, at least {} shared shingles\n\n",
+            corpus.coverage.document_count,
+            corpus.coverage.passage_count,
+            corpus.coverage.comparable_passage_count,
+            corpus.coverage.total_characters,
+            corpus.min_containment_basis_points,
+            corpus.min_shared_shingles
+        ));
+    } else {
+        out.push_str(&format!("- Database: {}\n", corpus.database_path));
+        out.push_str(&format!(
+            "- Documents: {}\n- Passages: {}\n- Near-exact comparable passages: {}\n- Stored characters: {}\n- Threshold: {} basis points, at least {} shared shingles\n\n",
+            corpus.coverage.document_count,
+            corpus.coverage.passage_count,
+            corpus.coverage.comparable_passage_count,
+            corpus.coverage.total_characters,
+            corpus.min_containment_basis_points,
+            corpus.min_shared_shingles
+        ));
+    }
     out.push_str(&format!("{}\n\n", corpus.coverage.scope));
     out.push_str(&format!("{}\n\n", corpus.persisted_text_note));
     for note in &corpus.notes {
@@ -422,6 +436,12 @@ fn render_corpus(out: &mut String, corpus: &Option<CorpusSection>) {
         );
         for hit in &corpus.context_overlaps {
             render_hit(out, hit);
+        }
+        if corpus.truncated_context_count > 0 {
+            out.push_str(&format!(
+                "{} additional set-aside overlaps were omitted from this report.\n\n",
+                corpus.truncated_context_count
+            ));
         }
     }
     if let Some(hit) = &corpus.strongest_below_threshold {

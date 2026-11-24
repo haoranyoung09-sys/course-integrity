@@ -409,6 +409,49 @@ impl Database {
         })
     }
 
+    pub fn remove_by_label(&mut self, label: &str) -> Result<Vec<RemoveOutcome>, Error> {
+        let canonical = canonical_label(label);
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|err| db_err(&self.path, err))?;
+        let ids: Vec<i64> = {
+            let mut stmt = tx
+                .prepare("SELECT id FROM documents WHERE source_label = ?1 ORDER BY id")
+                .map_err(|err| db_err(&self.path, err))?;
+            let rows = stmt
+                .query_map([&canonical], |row| row.get(0))
+                .map_err(|err| db_err(&self.path, err))?;
+            let mut collected = Vec::new();
+            for row in rows {
+                collected.push(row.map_err(|err| db_err(&self.path, err))?);
+            }
+            collected
+        };
+        if ids.is_empty() {
+            return Err(Error::Database {
+                path: self.path.clone(),
+                message: format!(
+                    "no document with source_label `{canonical}`. `corpus list` shows labels. Nothing was deleted."
+                ),
+            });
+        }
+        tx.execute(
+            "DELETE FROM documents WHERE source_label = ?1",
+            [&canonical],
+        )
+        .map_err(|err| db_err(&self.path, err))?;
+        tx.commit().map_err(|err| db_err(&self.path, err))?;
+        Ok(ids
+            .into_iter()
+            .map(|document_id| RemoveOutcome {
+                document_id,
+                source_label: canonical.clone(),
+                detail: "Deleted the stored text and its passages from this local database. No remote copy exists.".to_string(),
+            })
+            .collect())
+    }
+
     fn load_documents(&self) -> Result<Vec<StoredDocument>, Error> {
         let mut stmt = self
             .conn
@@ -539,6 +582,13 @@ impl CorpusIndex {
         let mut total_characters = 0usize;
         let mut comparable_passage_count = 0usize;
         for (doc_offset, (label, analysis)) in items.iter().enumerate() {
+            if !analysis
+                .passages
+                .iter()
+                .any(|passage| passage.exact_eligible)
+            {
+                continue;
+            }
             let document_id = (doc_offset + 1) as i64;
             let label = canonical_label(label);
             total_characters += analysis.characters;
@@ -592,36 +642,51 @@ impl CorpusIndex {
         extra_notes: &[String],
     ) -> CorpusSection {
         let label = canonical_label(label);
+        let query_comparable = analysis
+            .passages
+            .iter()
+            .any(|passage| passage.exact_eligible);
         let mut excluded_self = Vec::new();
         let mut excluded_ids = BTreeSet::new();
         if !options.include_self {
             for document in &self.documents {
                 if document.label == label {
                     excluded_ids.insert(document.id);
+                    let reason = if self.persisted {
+                        format!(
+                            "Stored document {} uses the same source label ({}). It was excluded so this file is not reported as overlapping its own stored copy. Pass --include-self to compare them.",
+                            document.id, document.label
+                        )
+                    } else {
+                        format!(
+                            "Batch entry {} uses the same source label ({}). It was excluded so this file is not compared against itself in pairwise mode.",
+                            document.id, document.label
+                        )
+                    };
                     excluded_self.push(ExcludedSelf {
                         document_id: document.id,
                         source_label: document.label.clone(),
-                        reason: format!(
-                            "Stored document {} uses the same source label ({}). It was excluded so this file is not reported as overlapping its own stored copy. Pass --include-self to compare them.",
-                            document.id, document.label
-                        ),
+                        reason,
                     });
                 }
             }
         }
 
-        let document_exact_matches = self
-            .documents
-            .iter()
-            .filter(|document| {
-                document.hash == analysis.content_hash && !excluded_ids.contains(&document.id)
-            })
-            .map(|document| DocumentExact {
-                source_document_id: document.id,
-                source_label: document.label.clone(),
-                note: DOCUMENT_EXACT_NOTE,
-            })
-            .collect::<Vec<_>>();
+        let document_exact_matches = if query_comparable {
+            self.documents
+                .iter()
+                .filter(|document| {
+                    document.hash == analysis.content_hash && !excluded_ids.contains(&document.id)
+                })
+                .map(|document| DocumentExact {
+                    source_document_id: document.id,
+                    source_label: document.label.clone(),
+                    note: DOCUMENT_EXACT_NOTE,
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
 
         let persisted_note = if self.persisted {
             PERSISTED_TEXT_NOTE
@@ -632,23 +697,25 @@ impl CorpusIndex {
         notes.extend(extra_notes.iter().cloned());
         if !self.persisted && self.documents.len() <= 1 && !options.include_self {
             notes.push(
-                "Only one file was scanned, so there are no other files in this batch to compare against.".to_string(),
+                "Fewer than two comparable files were scanned, so there are no other files in this batch to compare against.".to_string(),
             );
         }
         if options.include_self {
             notes.push(
-                "Self-matches are included because --include-self was set. A hit against the same source label is the stored copy, not an independent source.".to_string(),
+                "Self-matches are included because --include-self was set. A hit against the same source label is the file's own copy, not an independent source.".to_string(),
             );
         }
         if self.coverage.document_count == 0 {
-            notes.push(
-                "The local corpus has no stored documents. No overlap can be found. That is not evidence that the draft is original.".to_string(),
-            );
+            if self.persisted {
+                notes.push(
+                    "The local corpus has no stored documents. No overlap can be found. That is not evidence that the draft is original.".to_string(),
+                );
+            } else {
+                notes.push(
+                    "No files in this pairwise batch reached the minimum passage length. No overlap can be found. That is not evidence that the draft is original.".to_string(),
+                );
+            }
         }
-        let query_comparable = analysis
-            .passages
-            .iter()
-            .any(|passage| passage.exact_eligible);
         if !query_comparable {
             notes.push(format!(
                 "The query has no passage of at least {MIN_NORMALIZED_CHARS} normalized characters, so there is nothing to compare. No match is not evidence of originality."
@@ -768,9 +835,14 @@ impl CorpusIndex {
             && context.is_empty()
             && query_comparable
         {
-            notes.push(
-                "No passage met the exact or near-exact threshold against the stored passages that were compared.".to_string(),
-            );
+            let target = if self.persisted {
+                "the stored passages that were compared"
+            } else {
+                "the other files in this pairwise batch"
+            };
+            notes.push(format!(
+                "No passage met the exact or near-exact threshold against {target}."
+            ));
         }
         if !context.is_empty() {
             notes.push(
@@ -778,9 +850,15 @@ impl CorpusIndex {
             );
         }
         if !excluded_self.is_empty() && meeting.is_empty() {
-            notes.push(
-                "Stored rows with this source label were excluded. This file was not compared with its own stored copy.".to_string(),
-            );
+            if self.persisted {
+                notes.push(
+                    "Stored rows with this source label were excluded. This file was not compared with its own stored copy.".to_string(),
+                );
+            } else {
+                notes.push(
+                    "This file's own entry in the pairwise batch was excluded so it was not compared with itself.".to_string(),
+                );
+            }
         }
 
         CorpusSection {

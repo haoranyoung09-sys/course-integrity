@@ -491,19 +491,21 @@ fn transition_inventory(tokens: &[Token]) -> Vec<PhraseCount> {
         }
     }
 
-    let cjk: String = tokens
+    let cjk_chars: Vec<char> = tokens
         .iter()
         .filter(|token| token.kind == TokenKind::CjkOrKana)
-        .map(|token| token.text.as_str())
+        .flat_map(|token| token.text.chars())
         .collect();
-    let cjk_chars: Vec<char> = cjk.chars().collect();
     let chinese = chinese_phrases();
+    let chinese_patterns: Vec<Vec<char>> = chinese
+        .iter()
+        .map(|phrase| phrase.chars().collect())
+        .collect();
     let mut chinese_counts = vec![0usize; chinese.len()];
     let mut index = 0;
     while index < cjk_chars.len() {
         let mut matched = false;
-        for (phrase_index, phrase) in chinese.iter().enumerate() {
-            let phrase_chars: Vec<char> = phrase.chars().collect();
+        for (phrase_index, phrase_chars) in chinese_patterns.iter().enumerate() {
             if cjk_chars[index..].starts_with(phrase_chars.as_slice()) {
                 chinese_counts[phrase_index] += 1;
                 index += phrase_chars.len();

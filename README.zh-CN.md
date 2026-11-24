@@ -114,9 +114,10 @@ cargo run --locked -- corpus check fixtures/synthetic/group_draft.md \
 cargo run --locked -- corpus stats --db .course-integrity/demo.db
 cargo run --locked -- corpus list --db .course-integrity/demo.db
 cargo run --locked -- corpus remove --db .course-integrity/demo.db --id 1
+cargo run --locked -- corpus remove --db .course-integrity/demo.db --label fixtures/synthetic/shared_prompt.md
 ```
 
-`corpus remove --id` 只从这一个本地数据库里删除该条记录和它的段落。
+`corpus remove --id`（或 `--label`）只从这一个本地数据库里删除匹配记录和它的段落。
 
 不把讲义写进数据库、只在本次检查里把它排除在主要证据之外：
 
@@ -126,10 +127,11 @@ cargo run --locked -- scan fixtures/synthetic/group_draft.md \
   --db .course-integrity/demo.db
 ```
 
-只把文件夹里的多份草稿在内存中两两互查、不写任何数据库文件：
+只把文件夹（或多个文件路径）里的多份草稿在内存中两两互查、不写任何数据库文件：
 
 ```bash
 cargo run --locked -- scan fixtures/synthetic --pairwise --format html --out-dir /tmp/ci-pairwise
+cargo run --locked -- scan fixtures/synthetic/en_source.md fixtures/synthetic/en_exact_paragraph.md --pairwise
 ```
 
 达到可比较长度的 UTF-8 文件，原文会保存在这个 SQLite 文件里。DOCX 和 PDF 保存的是抽出的纯文本，不是原始字节。请不要提交这个数据库，也不要把它指向你无权保存的作业。短到无法比较的文件不会写入。`corpus list` 不打印正文，但正文仍在数据库里。

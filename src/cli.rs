@@ -10,7 +10,7 @@ use crate::corpus::{
     boilerplate_passages, threshold_basis_points, AddOutcome, CheckOptions, CorpusIndex, Database,
 };
 use crate::error::Error;
-use crate::files::load_inputs;
+use crate::files::{load_inputs, load_many_inputs};
 use crate::html::render_html;
 use crate::method::{
     CORPUS_SCHEMA, DEFAULT_MIN_CONTAINMENT, DISCLAIMER, PERSISTED_TEXT_NOTE, PRODUCT,
@@ -56,8 +56,9 @@ enum CorpusCommand {
 
 #[derive(Parser)]
 struct ScanArgs {
-    /// File or directory of .txt, .md, .docx, or text-based .pdf drafts.
-    path: PathBuf,
+    /// One or more files or directories of .txt, .md, .docx, or text-based .pdf drafts.
+    #[arg(required = true, value_name = "PATH")]
+    paths: Vec<PathBuf>,
     /// markdown, json, html, or all. `all` requires --out-dir.
     #[arg(long, value_enum, default_value_t = ReportFormat::Markdown)]
     format: ReportFormat,
@@ -98,8 +99,9 @@ struct ScanArgs {
 
 #[derive(Parser)]
 struct AddArgs {
-    /// File or directory of .txt, .md, .docx, or text-based .pdf files to store.
-    path: PathBuf,
+    /// One or more files or directories of .txt, .md, .docx, or text-based .pdf files to store.
+    #[arg(required = true, value_name = "PATH")]
+    paths: Vec<PathBuf>,
     /// Local SQLite database path. This file will contain the full text.
     #[arg(long, value_name = "PATH")]
     db: PathBuf,
@@ -117,8 +119,11 @@ struct RemoveArgs {
     #[arg(long, value_name = "PATH")]
     db: PathBuf,
     /// Document id from `corpus list`.
-    #[arg(long)]
-    id: i64,
+    #[arg(long, conflicts_with = "label", required_unless_present = "label")]
+    id: Option<i64>,
+    /// Source label from `corpus list` (removes all matching stored rows).
+    #[arg(long, conflicts_with = "id", required_unless_present = "id")]
+    label: Option<String>,
     /// text or json.
     #[arg(long, value_enum, default_value_t = PlainFormat::Text)]
     format: PlainFormat,
@@ -195,7 +200,7 @@ fn scan(args: ScanArgs) -> Result<(), Error> {
         ));
     }
     let threshold = threshold_basis_points(args.min_containment)?;
-    let loaded = load_inputs(&args.path, args.label.as_deref())?;
+    let loaded = load_many_inputs(&args.paths, args.label.as_deref())?;
     let mut boilerplate = Vec::new();
     for path in &args.boilerplate {
         let handout = load_inputs(path, None)?;
@@ -260,11 +265,11 @@ fn scan(args: ScanArgs) -> Result<(), Error> {
         }));
     }
     let report = bundle(loaded.warnings, files);
-    emit_report(&args.path, args.format, args.out_dir.as_deref(), &report)
+    emit_report(&args.paths, args.format, args.out_dir.as_deref(), &report)
 }
 
 fn emit_report(
-    input: &Path,
+    inputs: &[PathBuf],
     format: ReportFormat,
     out_dir: Option<&Path>,
     report: &Bundle,
@@ -286,7 +291,7 @@ fn emit_report(
             path: Some(dir.to_path_buf()),
             source,
         })?;
-        let stem = output_stem(input);
+        let stem = output_stem_for_inputs(inputs);
         if let Some(contents) = &markdown {
             write_report(dir, &stem, "md", contents)?;
         }
@@ -326,7 +331,7 @@ fn write_report(dir: &Path, stem: &str, extension: &str, contents: &str) -> Resu
 }
 
 fn add(args: AddArgs) -> Result<(), Error> {
-    let loaded = load_inputs(&args.path, args.label.as_deref())?;
+    let loaded = load_many_inputs(&args.paths, args.label.as_deref())?;
     for warning in &loaded.warnings {
         eprintln!("warning: {warning}");
     }
@@ -380,18 +385,41 @@ fn print_add(result: &AddOutcome) {
 
 fn remove(args: RemoveArgs) -> Result<(), Error> {
     let mut database = Database::open(&args.db)?;
-    let outcome = database.remove_document(args.id)?;
-    match args.format {
-        PlainFormat::Json => {
-            println!("{}", serde_json_pretty(&outcome)?);
+    if let Some(id) = args.id {
+        let outcome = database.remove_document(id)?;
+        match args.format {
+            PlainFormat::Json => {
+                println!("{}", serde_json_pretty(&outcome)?);
+            }
+            PlainFormat::Text => {
+                println!("database: {}", args.db.display());
+                println!("status: removed");
+                println!("document_id: {}", outcome.document_id);
+                println!("source_label: {}", outcome.source_label);
+                println!("detail: {}", outcome.detail);
+            }
         }
-        PlainFormat::Text => {
-            println!("database: {}", args.db.display());
-            println!("status: removed");
-            println!("document_id: {}", outcome.document_id);
-            println!("source_label: {}", outcome.source_label);
-            println!("detail: {}", outcome.detail);
+    } else if let Some(label) = args.label {
+        let outcomes = database.remove_by_label(&label)?;
+        match args.format {
+            PlainFormat::Json => {
+                println!("{}", serde_json_pretty(&outcomes)?);
+            }
+            PlainFormat::Text => {
+                println!("database: {}", args.db.display());
+                for outcome in &outcomes {
+                    println!("status: removed");
+                    println!("document_id: {}", outcome.document_id);
+                    println!("source_label: {}", outcome.source_label);
+                    println!("detail: {}", outcome.detail);
+                    println!();
+                }
+            }
         }
+    } else {
+        return Err(Error::Output(
+            "corpus remove requires either --id ID or --label LABEL".to_string(),
+        ));
     }
     Ok(())
 }
@@ -478,6 +506,14 @@ fn write_file(path: &Path, contents: &str) -> Result<(), Error> {
             source,
         })?;
     Ok(())
+}
+
+fn output_stem_for_inputs(inputs: &[PathBuf]) -> String {
+    if inputs.len() == 1 {
+        output_stem(&inputs[0])
+    } else {
+        "batch".to_string()
+    }
 }
 
 fn output_stem(path: &Path) -> String {

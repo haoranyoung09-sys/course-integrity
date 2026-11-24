@@ -1,5 +1,7 @@
+use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use crate::error::Error;
 use crate::extract::{extract_docx, extract_pdf};
@@ -18,6 +20,31 @@ pub(crate) struct LoadedFile {
 pub(crate) struct LoadedSet {
     pub files: Vec<LoadedFile>,
     pub warnings: Vec<String>,
+}
+
+pub(crate) fn load_many_inputs(
+    paths: &[PathBuf],
+    label_override: Option<&str>,
+) -> Result<LoadedSet, Error> {
+    if paths.len() == 1 {
+        return load_inputs(&paths[0], label_override);
+    }
+    if label_override.is_some() {
+        return Err(Error::LabelRequiresFile);
+    }
+    let mut files = Vec::new();
+    let mut warnings = Vec::new();
+    let mut seen_labels = BTreeSet::new();
+    for path in paths {
+        let loaded = load_inputs(path, None)?;
+        warnings.extend(loaded.warnings);
+        for file in loaded.files {
+            if seen_labels.insert(file.label.clone()) {
+                files.push(file);
+            }
+        }
+    }
+    Ok(LoadedSet { files, warnings })
 }
 
 pub(crate) fn load_inputs(path: &Path, label_override: Option<&str>) -> Result<LoadedSet, Error> {
@@ -107,6 +134,9 @@ fn walk(
             }
             walk(&path, paths, warnings)?;
         } else if file_type.is_file() {
+            if is_generated_review(&path) {
+                continue;
+            }
             if is_supported(&path) {
                 paths.push(path);
             } else if is_legacy_doc(&path) {
@@ -144,7 +174,8 @@ fn load_file(path: &Path) -> Result<LoadedFile, Error> {
             diagnostics: extracted.diagnostics,
         }
     } else {
-        let text = String::from_utf8(bytes.clone()).map_err(|_| Error::NotUtf8 {
+        let size = byte_len(&bytes);
+        let text = String::from_utf8(bytes).map_err(|_| Error::NotUtf8 {
             path: path.to_path_buf(),
         })?;
         let locations = paragraphs(&text)
@@ -155,7 +186,7 @@ fn load_file(path: &Path) -> Result<LoadedFile, Error> {
         LoadedFile {
             label: canonical_label(&path.to_string_lossy()),
             text,
-            bytes: byte_len(&bytes),
+            bytes: size,
             origin: "utf-8".to_string(),
             locations,
             diagnostics: vec![
@@ -169,14 +200,27 @@ fn load_file(path: &Path) -> Result<LoadedFile, Error> {
 }
 
 fn read_limited(path: &Path) -> Result<Vec<u8>, Error> {
-    let meta = fs::metadata(path).map_err(|source| io_at(path, source))?;
-    if meta.len() > MAX_FILE_BYTES {
+    let file = fs::File::open(path).map_err(|source| io_at(path, source))?;
+    if let Ok(meta) = file.metadata() {
+        if meta.len() > MAX_FILE_BYTES {
+            return Err(Error::TooLarge {
+                path: path.to_path_buf(),
+                bytes: meta.len(),
+            });
+        }
+    }
+    let mut limited = file.take(MAX_FILE_BYTES + 1);
+    let mut bytes = Vec::new();
+    limited
+        .read_to_end(&mut bytes)
+        .map_err(|source| io_at(path, source))?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
         return Err(Error::TooLarge {
             path: path.to_path_buf(),
-            bytes: meta.len(),
+            bytes: bytes.len() as u64,
         });
     }
-    fs::read(path).map_err(|source| io_at(path, source))
+    Ok(bytes)
 }
 
 fn io_at(path: &Path, source: std::io::Error) -> Error {
@@ -190,6 +234,13 @@ fn io_at(path: &Path, source: std::io::Error) -> Error {
             source,
         }
     }
+}
+
+fn is_generated_review(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_ascii_lowercase().ends_with(".review.md"))
+        .unwrap_or(false)
 }
 
 fn is_supported(path: &Path) -> bool {

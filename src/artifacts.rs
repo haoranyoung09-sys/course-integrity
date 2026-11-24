@@ -51,7 +51,7 @@ pub(crate) fn audit_text(text: &str, origin: &str) -> ArtifactReport {
                             &mut omitted,
                             finding(
                                 "trailing_whitespace",
-                                "U+0020",
+                                trailing_code_point(&chars, start),
                                 line,
                                 column_at(&chars, start),
                                 start,
@@ -125,7 +125,7 @@ pub(crate) fn audit_text(text: &str, origin: &str) -> ArtifactReport {
                             &mut omitted,
                             finding(
                                 "trailing_whitespace",
-                                "U+0020",
+                                trailing_code_point(&chars, start),
                                 line,
                                 column_at(&chars, start),
                                 start,
@@ -163,6 +163,28 @@ pub(crate) fn audit_text(text: &str, origin: &str) -> ArtifactReport {
         }
         index += 1;
         column += 1;
+    }
+
+    if !extracted {
+        if let Some(start) = trailing_ascii_whitespace(&chars, chars.len()) {
+            if trailing_listed < 8 {
+                push(
+                    &mut findings,
+                    &mut omitted,
+                    finding(
+                        "trailing_whitespace",
+                        trailing_code_point(&chars, start),
+                        line,
+                        column_at(&chars, start),
+                        start,
+                        &chars,
+                        start..chars.len(),
+                    ),
+                );
+            } else {
+                omitted += 1;
+            }
+        }
     }
 
     let newline_style = if extracted {
@@ -237,6 +259,14 @@ fn hidden_kind(ch: char) -> Option<&'static str> {
         '\u{00AD}' => Some("soft_hyphen"),
         '\u{206A}'..='\u{206F}' | '\u{034F}' | '\u{FFF9}'..='\u{FFFB}' => Some("other_format"),
         _ => None,
+    }
+}
+
+fn trailing_code_point(chars: &[char], start: usize) -> &'static str {
+    if chars.get(start).copied() == Some('\t') {
+        "U+0009"
+    } else {
+        "U+0020"
     }
 }
 
@@ -356,5 +386,22 @@ mod tests {
             .notes
             .iter()
             .any(|note| note.contains("extractor inserts paragraph breaks")));
+    }
+
+    #[test]
+    fn trailing_whitespace_handles_eof_line_and_tabs() {
+        let report = audit_text("Tab line\t\nLast line   ", "utf-8");
+        assert!(report
+            .findings
+            .iter()
+            .any(|item| item.kind == "trailing_whitespace"
+                && item.line == 1
+                && item.code_point == "U+0009"));
+        assert!(report
+            .findings
+            .iter()
+            .any(|item| item.kind == "trailing_whitespace"
+                && item.line == 2
+                && item.code_point == "U+0020"));
     }
 }

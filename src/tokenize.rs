@@ -232,10 +232,14 @@ pub fn sentences(nfkc_text: &str) -> Vec<String> {
         if is_sentence_ender(ch)
             && !is_decimal_dot(&chars, i)
             && !is_multidot_abbreviation(&chars, i)
-            && !is_list_number_dot(&buf, ch)
+            && !is_list_number_dot(&buf, &chars, i)
             && !is_abbreviation(&buf)
         {
             i += 1;
+            while i < chars.len() && is_sentence_ender(chars[i]) {
+                buf.push(chars[i]);
+                i += 1;
+            }
             while i < chars.len() && is_closer(chars[i]) {
                 buf.push(chars[i]);
                 i += 1;
@@ -315,7 +319,11 @@ pub(crate) fn passage_drafts(text: &str) -> Vec<PassageDraft> {
 
 pub(crate) fn canonical_label(label: &str) -> String {
     let replaced = label.trim().replace('\\', "/");
-    replaced.strip_prefix("./").unwrap_or(&replaced).to_string()
+    let mut rest = replaced.as_str();
+    while let Some(stripped) = rest.strip_prefix("./") {
+        rest = stripped;
+    }
+    rest.to_string()
 }
 
 fn push_sentence(out: &mut Vec<String>, buf: &mut String) {
@@ -337,8 +345,14 @@ fn is_closer(ch: char) -> bool {
     )
 }
 
-fn is_list_number_dot(buf_including_dot: &str, ch: char) -> bool {
-    if ch != '.' {
+fn is_list_number_dot(buf_including_dot: &str, chars: &[char], index: usize) -> bool {
+    if chars.get(index).copied() != Some('.') {
+        return false;
+    }
+    if !chars
+        .get(index + 1)
+        .is_some_and(|next| next.is_whitespace())
+    {
         return false;
     }
     let prefix = buf_including_dot.trim_end_matches('.').trim();
@@ -499,5 +513,9 @@ mod tests {
         let list_and_heading =
             "## Steps\n- Measure 200 ml of water\n- Heat to 60 C\n1. Record every 30 s";
         assert_eq!(sentences(list_and_heading).len(), 4);
+
+        let punct = sentences("What?! Wait... We stopped.");
+        assert_eq!(punct, vec!["What?!", "Wait...", "We stopped."]);
+        assert_eq!(canonical_label("././sub\\draft.md"), "sub/draft.md");
     }
 }

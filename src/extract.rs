@@ -361,7 +361,7 @@ fn push_xml_paragraphs(
                 if is_local(&name, "p") {
                     if let Some((p_no, raw)) = para_stack.pop() {
                         let flat = flatten_block(&raw);
-                        if !flat.is_empty() {
+                        if !flat.trim_matches('\u{feff}').trim().is_empty() {
                             locations.push(format!("{location_file} paragraph {p_no}"));
                             blocks.push(flat);
                         }
@@ -418,7 +418,7 @@ fn split_blocks(text: &str) -> Vec<String> {
     let mut blocks = Vec::new();
     let mut current: Vec<&str> = Vec::new();
     for line in normalized.split('\n') {
-        if line.trim().is_empty() {
+        if line.trim_matches('\u{feff}').trim().is_empty() {
             if !current.is_empty() {
                 blocks.push(current.join("\n"));
                 current.clear();
@@ -615,5 +615,24 @@ mod tests {
         assert!(!extracted.text.contains("Box text"));
         assert!(!extracted.text.contains("Duplicate fallback."));
         assert!(!extracted.text.contains("Removed words."));
+    }
+
+    #[test]
+    fn bom_only_docx_paragraph_does_not_shift_locations() {
+        let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">
+  <w:body>
+    <w:p><w:r><w:t>\u{feff}</w:t></w:r></w:p>
+    <w:p><w:r><w:t>First real paragraph.</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Second real paragraph.</w:t></w:r></w:p>
+  </w:body>
+</w:document>";
+        let bytes = docx_with(xml, &[]);
+        let extracted = extract_docx(Path::new("bom.docx"), &bytes).unwrap();
+        let paras = crate::tokenize::paragraphs(&extracted.text);
+        assert_eq!(paras.len(), 2);
+        assert_eq!(extracted.locations.len(), paras.len());
+        assert_eq!(extracted.locations[0], "word/document.xml paragraph 2");
+        assert_eq!(extracted.locations[1], "word/document.xml paragraph 3");
     }
 }

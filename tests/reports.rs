@@ -215,11 +215,18 @@ fn html_and_markdown_include_corpus_details_and_locations() {
         String::from_utf8_lossy(&html_run.stderr)
     );
     let html = String::from_utf8_lossy(&html_run.stdout);
-    assert!(html.contains("<nav class=\"toc\">"));
+    assert!(html.contains("<nav class=\"toc\""));
+    assert!(html.contains("<div class=\"cards\">"));
+    assert!(html.contains("<div class=\"compare\">"));
+    assert!(html.contains("#file-1-p-"));
+    assert!(html.contains("prefers-color-scheme: dark"));
     assert!(html.contains("Transition inventory"));
     assert!(html.contains("<h3>Repetition</h3>"));
     assert!(html.contains("Excluded as self"));
     assert!(html.contains("Nearest passage below the threshold"));
+    assert!(html.contains("Transition phrases are a fixed inventory"));
+    assert!(!html.contains("<script"));
+    assert!(!html.contains("http://") && !html.contains("https://"));
 
     let md_docx = run(&[
         "scan",
